@@ -1,0 +1,88 @@
+{
+  "modes": [
+    { "value": "piano", "label": "Piano Reading" },
+    { "value": "rhythm", "label": "Piano Rhythm" }
+  ],
+  "grades": [
+    { "value": 1, "label": "Grade 1", "subLabel": "ABRSM Grade 1" },
+    { "value": 2, "label": "Grade 2", "subLabel": "ABRSM Grade 2" },
+    { "value": 3, "label": "Grade 3", "subLabel": "ABRSM Grade 3" },
+    { "value": 4, "label": "Grade 4", "subLabel": "ABRSM Grade 4" },
+    { "value": 5, "label": "Grade 5", "subLabel": "ABRSM Grade 5" }
+  ],
+  "timeSignatures": ["2/4", "3/4", "4/4", "6/8"],
+  "measureCounts": [4, 8, 12],
+  "tempoPresets": [
+    { "value": "slow", "label": "Slow", "bpm": 72 },
+    { "value": "medium", "label": "Medium", "bpm": 92 },
+    { "value": "fast", "label": "Fast", "bpm": 116 }
+  ],
+  "keySignatures": [
+    { "value": "C",   "label": "C major",  "type": "major", "minGrade": 1 },
+    { "value": "G",   "label": "G major",  "type": "major", "minGrade": 1 },
+    { "value": "F",   "label": "F major",  "type": "major", "minGrade": 1 },
+    { "value": "D",   "label": "D major",  "type": "major", "minGrade": 2 },
+    { "value": "Am",  "label": "A minor",  "type": "minor", "minGrade": 2 },
+    { "value": "Dm",  "label": "D minor",  "type": "minor", "minGrade": 2 },
+    { "value": "Bb",  "label": "Bb major", "type": "major", "minGrade": 3 },
+    { "value": "Eb",  "label": "Eb major", "type": "major", "minGrade": 3 },
+    { "value": "Em",  "label": "E minor",  "type": "minor", "minGrade": 3 },
+    { "value": "A",   "label": "A major",  "type": "major", "minGrade": 4 },
+    { "value": "Ab",  "label": "Ab major", "type": "major", "minGrade": 4 },
+    { "value": "E",   "label": "E major",  "type": "major", "minGrade": 4 },
+    { "value": "Gm",  "label": "G minor",  "type": "minor", "minGrade": 4 },
+    { "value": "Cm",  "label": "C minor",  "type": "minor", "minGrade": 4 },
+    { "value": "Bm",  "label": "B minor",  "type": "minor", "minGrade": 5 },
+    { "value": "Fm",  "label": "F minor",  "type": "minor", "minGrade": 5 },
+    { "value": "F#m", "label": "F# minor", "type": "minor", "minGrade": 5 },
+    { "value": "C#m", "label": "C# minor", "type": "minor", "minGrade": 5 }
+  ],
+  "handPositions": [
+    { "value": "C", "label": "C position" },
+    { "value": "G", "label": "G position" },
+    { "value": "D", "label": "D position" },
+    { "value": "F", "label": "F position" },
+    { "value": "Bb", "label": "Bb position" }
+  ],
+  "handActivities": [
+    { "value": "right-only", "label": "Right hand only" },
+    { "value": "left-only", "label": "Left hand only" },
+    { "value": "both", "label": "Both hands" }
+  ],
+  "coordinationStyles": [
+    { "value": "support", "label": "Support" },
+    { "value": "alternating", "label": "Alternating" },
+    { "value": "together", "label": "Together" }
+  ],
+  "readingFocuses": [
+    { "value": "balanced", "label": "Balanced" },
+    { "value": "melodic", "label": "Melodic" },
+    { "value": "harmonic", "label": "Harmonic" }
+  ],
+  "rightHandMotions": [
+    { "value": "stepwise", "label": "Stepwise" },
+    { "value": "small-leaps", "label": "Small leaps" },
+    { "value": "mixed", "label": "Mixed" }
+  ],
+  "leftHandPatterns": [
+    { "value": "held", "label": "Held" },
+    { "value": "repeated", "label": "Repeated" },
+    { "value": "simple-broken", "label": "Simple broken" }
+  ],
+  "defaultConfig": {
+    "mode": "piano",
+    "grade": 1,
+    "timeSignature": "4/4",
+    "measureCount": 4,
+    "tempoPreset": "medium",
+    "keySignature": "C",
+    "handPosition": "C",
+    "handActivity": "both",
+    "coordinationStyle": "support",
+    "readingFocus": "balanced",
+    "rightHandMotion": "stepwise",
+    "leftHandPattern": "held",
+    "allowRests": true,
+    "allowAccidentals": false
+  }
+}

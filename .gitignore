@@ -1,0 +1,23 @@
+# Node / Expo
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+mobile/web-build/
+mobile/.env*.local
+
+# Expo generated native folders
+mobile/android/
+mobile/ios/
+
+# Python
+backend/.venv/
+backend/__pycache__/
+backend/**/*.pyc
+
+# Generated cache/output
+backend/cache/*.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log

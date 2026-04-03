@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "preview-server",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "9090", "--directory", "backend/cache"],
+      "port": 9090
+    }
+  ]
+}
