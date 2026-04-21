@@ -1,6 +1,6 @@
 # SheetGenerator
 
-SheetGenerator is a mobile-first sight-reading generator for self-learners.
+SheetGenerator is a desktop-first sight-reading generator for self-learners.
 
 This MVP is intentionally narrow:
 
@@ -9,8 +9,14 @@ This MVP is intentionally narrow:
 - local-first presets, generated sheets, and practice history
 - no login, no sync, no teacher tools, no classroom workflows
 
+The desktop browser app is now the primary release surface. The existing Expo app remains in the repo, but it is no longer the driver for product structure.
+
 ## Workspace layout
 
+- `desktop/`
+  - Vite React + TypeScript browser app
+  - desktop shell for Home, Create, Library, Settings, and Exercise routes
+  - IndexedDB persistence with full local history
 - `mobile/`
   - Expo React Native app
   - local SQLite persistence
@@ -20,11 +26,42 @@ This MVP is intentionally narrow:
   - music21 MusicXML generation
   - Verovio SVG rendering when available
   - local generated cache artifacts under `backend/cache/` (`.gitkeep` only in Git)
+- `frontend-shared/`
+  - framework-neutral frontend types, option loading, preset rotation logic, and formatting helpers
 - `shared/`
   - shared option and stage JSON contracts
 
-The Expo app imports the shared JSON from the workspace root, so `mobile/metro.config.js` is configured to watch the parent folder.
-It also enables `.wasm` assets so `expo-sqlite` can bundle on web.
+Both frontend apps consume the root shared JSON contracts and the shared TypeScript domain layer.
+`mobile/metro.config.js` is configured to watch the parent folder so Expo can import those root modules.
+
+## Desktop app
+
+Requirements:
+
+- Node 20+ recommended
+- npm 10+ recommended
+
+Start the desktop app:
+
+```powershell
+cd C:\Users\Lux\SheetGenerator\desktop
+npm install
+npm run typecheck
+npm run build
+npm run dev
+```
+
+Environment:
+
+- `VITE_API_BASE_URL`
+  - defaults to `http://127.0.0.1:8000`
+  - copy `desktop/.env.example` to `desktop/.env.local` and update if needed
+
+Desktop persistence:
+
+- IndexedDB in the browser
+- keeps full local history for presets, generated exercises, practice sessions, and settings
+- designed behind a storage adapter so the browser renderer can later be wrapped by Tauri without changing page logic
 
 ## Mobile app
 
@@ -53,6 +90,8 @@ Default fallback API base:
 
 - Android emulator: `http://10.0.2.2:8000`
 - iOS simulator / web on same machine: `http://127.0.0.1:8000`
+
+The mobile app now reuses the same shared frontend domain layer as desktop for types, options, formatting, and preset rotation behavior.
 
 ## Backend API
 
@@ -91,7 +130,14 @@ Generation endpoint:
 
 ## What the MVP stores locally
 
-SQLite tables in the app:
+Desktop browser stores:
+
+- `settings`
+- `exercises`
+- `presets`
+- `sessions`
+
+Mobile app SQLite tables:
 
 - `presets`
 - `generated_exercises`
