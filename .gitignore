@@ -1,4 +1,8 @@
 # Node / Expo
+desktop/node_modules/
+desktop/dist/
+desktop/.vercel/
+desktop/.env*.local
 mobile/node_modules/
 mobile/.expo/
 mobile/dist/
@@ -33,3 +37,5 @@ Thumbs.db
 # Local tooling state
 .claude/settings.local.json
 .vercel/
+
+.vercel
