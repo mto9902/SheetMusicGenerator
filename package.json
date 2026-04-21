@@ -1,0 +1,9 @@
+{
+  "name": "sheetgenerator",
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix desktop run build",
+    "typecheck:desktop": "npm --prefix desktop run typecheck",
+    "typecheck:mobile": "npm --prefix mobile run typecheck"
+  }
+}

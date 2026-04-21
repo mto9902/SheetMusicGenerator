@@ -1,0 +1,11 @@
+{
+  "installCommand": "npm --prefix desktop install",
+  "buildCommand": "npm run build",
+  "outputDirectory": "desktop/dist",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
