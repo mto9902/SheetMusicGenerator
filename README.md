@@ -19,7 +19,7 @@ This MVP is intentionally narrow:
   - FastAPI generator service
   - music21 MusicXML generation
   - Verovio SVG rendering when available
-  - cached response files under `backend/cache/`
+  - local generated cache artifacts under `backend/cache/` (`.gitkeep` only in Git)
 - `shared/`
   - shared option and stage JSON contracts
 

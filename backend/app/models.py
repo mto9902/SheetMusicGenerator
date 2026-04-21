@@ -82,6 +82,7 @@ class ExerciseSummary(BaseModel):
 class ExerciseDebug(BaseModel):
     scoreBreakdown: dict[str, float] | None = None
     planSummary: dict[str, Any] | None = None
+    qualityGate: dict[str, Any] | None = None
 
 
 class ExerciseResponse(BaseModel):

@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .cache import cache_key, cache_stats, read_cache, write_cache
+from .config import SHARED_DIR
 from .generator import build_exercise
 from .models import ExerciseRequest, ExerciseResponse
 
@@ -21,23 +22,48 @@ app.add_middleware(
 )
 
 
+def _fingerprint_parts(path: Path, root: Path) -> list[str]:
+    if not path.exists():
+        return []
+
+    if path.is_file():
+        candidates = [path]
+    else:
+        candidates = sorted(
+            candidate
+            for candidate in path.rglob("*")
+            if candidate.is_file() and candidate.suffix in {".py", ".json"}
+        )
+
+    parts: list[str] = []
+    for candidate in candidates:
+        try:
+            stamp = int(candidate.stat().st_mtime)
+        except OSError:
+            continue
+        try:
+            label = candidate.relative_to(root).as_posix()
+        except ValueError:
+            label = candidate.name
+        parts.append(f"{label}:{stamp}")
+    return parts
+
+
 def _build_fingerprint():
     base = Path(__file__).resolve().parent
+    root = base.parents[1]
     tracked = [
         base / "main.py",
-        base / "generator.py",
         base / "audio.py",
-        base.parent / "shared",
+        base / "cache.py",
+        base / "config.py",
+        base / "models.py",
+        base / "generator",
+        SHARED_DIR,
     ]
     parts: list[str] = []
     for path in tracked:
-        if not path.exists():
-            continue
-        try:
-            stamp = int(path.stat().st_mtime)
-        except OSError:
-            continue
-        parts.append(f"{path.name}:{stamp}")
+        parts.extend(_fingerprint_parts(path, root))
     return "|".join(parts)
 
 

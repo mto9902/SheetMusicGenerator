@@ -16,8 +16,19 @@ backend/**/*.pyc
 
 # Generated cache/output
 backend/cache/*.json
+backend/cache/*.html
+backend/cache/*.svg
+backend/cache/*.xml
+backend/debug_*.svg
+backend/debug_output.musicxml
+backend/tmp_*.json
+backend/tmp_*.musicxml
+backend/tmp_*.svg
 
 # OS / editor
 .DS_Store
 Thumbs.db
 *.log
+
+# Local tooling state
+.claude/settings.local.json
