@@ -105,9 +105,45 @@ def _build_left_pattern(
 
     # Phase 9: voice leading — prefer smooth bass motion from previous measure
     if prev_bass_pitch is not None and not is_phrase_start:
-        smooth_candidates = sorted(tones, key=lambda p: abs(p - prev_bass_pitch))
-        if smooth_candidates and abs(smooth_candidates[0] - prev_bass_pitch) <= 5:
-            low = smooth_candidates[0]
+        if bass_target is not None:
+            target_value = int(bass_target)
+            blended_candidates = sorted(
+                tones,
+                key=lambda pitch_value: (
+                    abs(pitch_value - target_value) * 0.72
+                    + abs(pitch_value - prev_bass_pitch) * 0.38
+                    + (
+                        0.85
+                        if pitch_value == prev_bass_pitch and abs(target_value - prev_bass_pitch) >= 2
+                        else 0.0
+                    )
+                ),
+            )
+            if blended_candidates:
+                best = blended_candidates[0]
+                if abs(best - prev_bass_pitch) <= 7:
+                    low = best
+                else:
+                    stepwise_candidates = [
+                        pitch_value for pitch_value in tones
+                        if abs(pitch_value - prev_bass_pitch) <= 5
+                    ]
+                    if stepwise_candidates:
+                        low = min(
+                            stepwise_candidates,
+                            key=lambda pitch_value: (
+                                abs(pitch_value - target_value)
+                                + (
+                                    0.65
+                                    if pitch_value == prev_bass_pitch and abs(target_value - prev_bass_pitch) >= 2
+                                    else 0.0
+                                )
+                            ),
+                        )
+        else:
+            smooth_candidates = sorted(tones, key=lambda p: abs(p - prev_bass_pitch))
+            if smooth_candidates and abs(smooth_candidates[0] - prev_bass_pitch) <= 5:
+                low = smooth_candidates[0]
     max_lh_span = _simultaneous_span_cap(
         grade,
         "lh",

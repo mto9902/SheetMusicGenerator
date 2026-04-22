@@ -1161,7 +1161,7 @@ def _build_bass_line_plan(
         position = index / max(1, len(phrase_measures) - 1) if len(phrase_measures) > 1 else 0.5
         register_targets[measure_number] = max(
             0.02,
-            min(0.28, low_span + (high_span - low_span) * position * 0.35),
+            min(0.28, low_span + (high_span - low_span) * position),
         )
         pitch_roles[measure_number] = _bass_pitch_role_for_measure(
             index,
@@ -1199,26 +1199,33 @@ def _resolve_top_line_target(
         harmony,
         plan.pitch_roles[measure_number],
     )
+    desired_set = {int(pitch_value) for pitch_value in candidates}
     preferred = [
         pitch_value for pitch_value in candidates
         if _nearest_pool_index(pool, pitch_value) >= max(0, len(pool) // 2 - 1)
     ] or candidates
+    preferred_set = {int(pitch_value) for pitch_value in preferred}
     target_index = _relative_slot_to_index(plan.register_targets.get(measure_number, 0.7), len(pool))
     motion_role = plan.motion_roles.get(measure_number, "step")
 
     def _score(pitch_value: int) -> float:
+        pool_index = _nearest_pool_index(pool, pitch_value)
         interval = abs(pitch_value - reference_pitch)
         interval_penalty = interval * 0.05
-        if motion_role == "rise" and pitch_value <= reference_pitch:
-            interval_penalty += 0.45
+        if motion_role in {"rise", "push"} and pitch_value <= reference_pitch:
+            interval_penalty += 0.55
         elif motion_role == "release" and pitch_value >= reference_pitch:
-            interval_penalty += 0.45
+            interval_penalty += 0.55
         elif motion_role == "cadence":
             interval_penalty += interval * 0.02
+        elif motion_role == "step" and pitch_value == reference_pitch:
+            interval_penalty += 0.25
         repeat_penalty = 0.7 if pitch_value == reference_pitch else 0.0
-        return abs(_nearest_pool_index(pool, pitch_value) - target_index) + interval_penalty + repeat_penalty
+        role_penalty = 0.0 if pitch_value in desired_set else (0.9 if motion_role == "cadence" else 0.38)
+        register_penalty = 0.0 if pitch_value in preferred_set else 0.22
+        return abs(pool_index - target_index) * 0.9 + interval_penalty + repeat_penalty + role_penalty + register_penalty
 
-    return min(preferred, key=_score)
+    return min(pool, key=_score)
 
 
 def _resolve_bass_line_target(
@@ -1239,35 +1246,45 @@ def _resolve_bass_line_target(
         harmony,
         plan.pitch_roles[measure_number],
     )
+    desired_set = {int(pitch_value) for pitch_value in candidates}
     preferred = [
         pitch_value for pitch_value in candidates
         if _nearest_pool_index(pool, pitch_value) <= max(1, len(pool) // 2)
     ] or candidates
+    preferred_set = {int(pitch_value) for pitch_value in preferred}
     target_index = _relative_slot_to_index(plan.register_targets.get(measure_number, 0.15), len(pool))
     motion_role = plan.motion_roles.get(measure_number, "step")
 
     def _score(pitch_value: int) -> float:
+        pool_index = _nearest_pool_index(pool, pitch_value)
         interval_penalty = 0.0
         if reference_pitch is not None:
             interval = abs(pitch_value - reference_pitch)
             if motion_role == "hold":
-                interval_penalty = interval * 0.08
+                interval_penalty = interval * 0.10
             elif motion_role == "step":
                 if interval == 0:
-                    interval_penalty = 0.55
+                    interval_penalty = 0.75
                 elif interval <= 5:
                     interval_penalty = abs(interval - 2.5) * 0.08
                 else:
                     interval_penalty = 0.55 + (interval - 5) * 0.1
             elif motion_role == "leap":
-                interval_penalty = abs(interval - 6) * 0.06
+                if interval == 0:
+                    interval_penalty = 0.85
+                elif interval < 3:
+                    interval_penalty = 0.45 + (3 - interval) * 0.18
+                else:
+                    interval_penalty = abs(interval - 5.5) * 0.05
             else:
-                interval_penalty = interval * 0.05
+                interval_penalty = interval * 0.04
             if pitch_value == reference_pitch and motion_role != "hold":
                 interval_penalty += 0.45
-        return abs(_nearest_pool_index(pool, pitch_value) - target_index) + interval_penalty
+        role_penalty = 0.0 if pitch_value in desired_set else (0.85 if motion_role == "cadence" else 0.32)
+        register_penalty = 0.0 if pitch_value in preferred_set else 0.18
+        return abs(pool_index - target_index) * 0.9 + interval_penalty + role_penalty + register_penalty
 
-    return min(preferred, key=_score)
+    return min(pool, key=_score)
 
 
 def _choose_ornament_name(
