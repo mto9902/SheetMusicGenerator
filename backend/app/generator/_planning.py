@@ -1030,10 +1030,17 @@ def _top_pitch_role_for_measure(
     is_phrase_end: bool,
     answer_form: str,
     focus: str,
+    phrase_index: int,
+    measure_index: int,
+    grade: int,
 ) -> str:
     if is_phrase_end:
         return "tonic" if cadence_target == "tonic" else cadence_target
     if measure_role == "establish":
+        if grade <= 2 and measure_index == 0:
+            return "opening"
+        if grade <= 2:
+            return "third" if phrase_index == 0 or focus != "harmonic" else "root"
         return "third" if focus == "melodic" else "root"
     if measure_role == "answer":
         return "fifth" if answer_form == "sequence" else "third"
@@ -1125,12 +1132,25 @@ def _build_top_line_plan(
             min(style_profile.register_span[1], register_slot + 0.08),
         )
         measure_role = role_by_measure.get(measure_number, "develop")
+        if style_profile.grade <= 2 and measure_role == "establish" and index == 0:
+            register_targets[measure_number] = max(
+                register_targets[measure_number],
+                0.88 if phrase_index == 0 else 0.8,
+            )
+        elif style_profile.grade <= 2 and measure_number == peak_measure:
+            register_targets[measure_number] = max(
+                register_targets[measure_number],
+                0.84 if phrase_index == 0 else 0.76,
+            )
         pitch_roles[measure_number] = _top_pitch_role_for_measure(
             measure_role,
             cadence_target,
             is_phrase_end=measure_number == phrase_measures[-1],
             answer_form=answer_form,
             focus=style_profile.focus,
+            phrase_index=phrase_index,
+            measure_index=index,
+            grade=style_profile.grade,
         )
         motion_roles[measure_number] = _top_motion_role_for_measure(measure_role, contour)
 

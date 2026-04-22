@@ -204,6 +204,24 @@ def _harmonic_plan(
                 progression.extend(rng.choice(bank))
         progression = progression[: len(phrase_measures)]
 
+        # Beginner phrases should not default to tonic-centered openings every
+        # time. A small harmonic nudge toward IV / V / vi (or the minor-key
+        # parallels) gives the reading line a more varied first note while
+        # keeping the cadence pattern intact.
+        if (
+            grade <= 2
+            and phrase_index == 0
+            and len(progression) >= 4
+            and progression[0] in {"I", "i"}
+            and rng.random() < 0.8
+        ):
+            opening_choices = ["IV", "V", "vi"] if not minor else ["iv", "V", "VI"]
+            if len(progression) > 1:
+                filtered_choices = [choice for choice in opening_choices if choice != progression[1]]
+                if filtered_choices:
+                    opening_choices = filtered_choices
+            progression[0] = rng.choice(opening_choices)
+
         if cadence_strength == "weak":
             progression[-1] = "V"
         else:

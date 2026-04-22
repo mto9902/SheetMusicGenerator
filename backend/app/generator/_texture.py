@@ -102,6 +102,21 @@ def _fit_motive_start_index(desired_index: int, steps: list[int], pool_length: i
     return max(min_index, min(max_index, desired_index))
 
 
+def _align_target_pitch(
+    pool: list[int],
+    target_pitch: int,
+    reference_pitch: int,
+    max_leap: int,
+) -> int:
+    reachable = [
+        candidate
+        for candidate in pool
+        if abs(int(candidate) - int(reference_pitch)) <= max_leap
+    ]
+    search_pool = reachable or pool
+    return min(search_pool, key=lambda candidate: abs(int(candidate) - int(target_pitch)))
+
+
 def _realize_motive_fragment(
     pool: list[int],
     harmony_tones: list[int],
@@ -228,7 +243,12 @@ def _realize_motive_fragment(
         prev_pitch = stable_pitch
         recent = (recent[:-1] + [stable_pitch])[-6:] if recent else [stable_pitch]
     elif last_event and target_pitch is not None:
-        aligned_pitch = min(pool, key=lambda candidate: abs(candidate - int(target_pitch)))
+        aligned_pitch = _align_target_pitch(
+            pool,
+            int(target_pitch),
+            prev_pitch,
+            max_leap,
+        )
         last_event["pitches"] = [aligned_pitch]
         prev_pitch = aligned_pitch
         recent = (recent[:-1] + [aligned_pitch])[-6:] if recent else [aligned_pitch]
@@ -483,6 +503,7 @@ def _pitch_role_candidates(
         "root": {root_pc},
         "third": {third_pc},
         "fifth": {fifth_pc},
+        "opening": _chord_pitch_classes(key_signature, harmony),
         "tonic": {tonic_pc},
         "dominant": {dominant_pc},
         "stable": _chord_pitch_classes(key_signature, harmony) | {tonic_pc},
@@ -883,9 +904,10 @@ def _realize_line_measure(
         last_event = event
 
     if last_event is not None:
-        last_event["pitches"] = [target_pitch]
-        prev_pitch = target_pitch
-        recent = (recent[:-1] + [target_pitch])[-6:] if recent else [target_pitch]
+        aligned_pitch = _align_target_pitch(pool, target_pitch, prev_pitch, max_leap)
+        last_event["pitches"] = [aligned_pitch]
+        prev_pitch = aligned_pitch
+        recent = (recent[:-1] + [aligned_pitch])[-6:] if recent else [aligned_pitch]
 
     events = _apply_ornament_to_events(events, ornament.name, allow_accidentals)
     return events, prev_pitch, recent, direction, cursor, last_event
