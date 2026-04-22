@@ -88,9 +88,45 @@ def _key_pitch_classes(key_signature: str) -> set[int]:
     return {(tonic + step) % 12 for step in steps}
 
 
-def _position_pitches_from_root(root: int, key_signature: str,
-                                pool_size: int = 5) -> list[int]:
+def _position_pitches_from_root(
+    root: int,
+    key_signature: str,
+    pool_size: int = 5,
+    *,
+    hand: str | None = None,
+    grade: int | None = None,
+) -> list[int]:
     pitch_classes = _key_pitch_classes(key_signature)
+    if hand is not None and grade is not None:
+        lower_limit, upper_limit = hand_position_limits_for_grade(hand, grade)
+
+        # Grades 1-2 stay "in position", but allow a small fringe around that
+        # core so RH can reach above the five-finger top note and LH can dip
+        # below the bass anchor without introducing full position shifts.
+        if grade <= 2:
+            if hand == "rh":
+                window_low = max(lower_limit, root)
+                window_high = min(upper_limit, root + 11)
+            else:
+                window_low = max(lower_limit, root - 3)
+                window_high = min(upper_limit, root + 7)
+
+            pitches = [
+                midi for midi in range(window_low, window_high + 1)
+                if midi % 12 in pitch_classes
+            ]
+            if pitches:
+                return pitches
+
+        scan_low = max(lower_limit, root)
+        scan_high = min(upper_limit, root + pool_size + 8)
+        pitches = [
+            midi for midi in range(scan_low, scan_high + 1)
+            if midi % 12 in pitch_classes
+        ]
+        if len(pitches) >= pool_size:
+            return pitches[:pool_size]
+
     scan_range = pool_size + 8
     pitches = [midi for midi in range(root, root + scan_range)
                if midi % 12 in pitch_classes]

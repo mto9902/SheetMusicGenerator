@@ -101,9 +101,21 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
     right_root = HAND_POSITION_ROOTS["rh"][request["handPosition"]]
     left_root = HAND_POSITION_ROOTS["lh"][request["handPosition"]]
 
-    rh_pool = _position_pitches_from_root(right_root, request["keySignature"], pool_size)
+    rh_pool = _position_pitches_from_root(
+        right_root,
+        request["keySignature"],
+        pool_size,
+        hand="rh",
+        grade=grade,
+    )
     lh_pool_size = max(8, pool_size)
-    lh_pool = _position_pitches_from_root(left_root, request["keySignature"], lh_pool_size)
+    lh_pool = _position_pitches_from_root(
+        left_root,
+        request["keySignature"],
+        lh_pool_size,
+        hand="lh",
+        grade=grade,
+    )
 
     rh_weights = _weights_for_hand("rh", preset, request)
     lh_weights = _weights_for_hand("lh", preset, request)
@@ -226,8 +238,20 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
             if measure_number > 1 and rng.random() < float(piano.get("positionShiftChance", 0.0)):
                 right_root = _shift_root(right_root, "rh", grade, rng)
                 left_root = _shift_root(left_root, "lh", grade, rng)
-                rh_pool = _position_pitches_from_root(right_root, request["keySignature"], pool_size)
-                lh_pool = _position_pitches_from_root(left_root, request["keySignature"], lh_pool_size)
+                rh_pool = _position_pitches_from_root(
+                    right_root,
+                    request["keySignature"],
+                    pool_size,
+                    hand="rh",
+                    grade=grade,
+                )
+                lh_pool = _position_pitches_from_root(
+                    left_root,
+                    request["keySignature"],
+                    lh_pool_size,
+                    hand="lh",
+                    grade=grade,
+                )
                 rh_pitch = min(rh_pool, key=lambda pitch_value: abs(pitch_value - rh_pitch))
                 lh_pitch = min(lh_pool, key=lambda pitch_value: abs(pitch_value - lh_pitch))
 

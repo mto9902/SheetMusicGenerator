@@ -91,16 +91,16 @@ _MINOR_PROGRESSIONS: dict[int, list[list[str]]] = {
 }
 
 _MAJOR_WEAK_CADENCE_BANK: dict[int, list[list[str]]] = {
-    1: [["I", "I", "V", "V"], ["I", "IV", "I", "V"], ["I", "V", "I", "V"]],
-    2: [["I", "IV", "I", "V"], ["I", "V", "IV", "V"], ["I", "IV", "V", "V"]],
+    1: [["I", "I", "V", "V"], ["I", "IV", "I", "V"], ["I", "V", "I", "V"], ["vi", "IV", "I", "V"]],
+    2: [["I", "IV", "I", "V"], ["I", "V", "IV", "V"], ["I", "IV", "V", "V"], ["vi", "IV", "ii", "V"]],
     3: [["I", "IV", "ii", "V"], ["I", "V", "IV", "V"], ["I", "vi", "ii", "V"]],
     4: [["I", "vi", "ii", "V"], ["I", "IV", "ii", "V"], ["I", "V", "IV", "V"]],
     5: [["I", "vi", "ii", "V"], ["I", "IV", "ii", "V"], ["I", "ii", "IV", "V"]],
 }
 
 _MAJOR_STRONG_CADENCE_BANK: dict[int, list[list[str]]] = {
-    1: [["I", "V", "V", "I"], ["I", "IV", "V", "I"], ["I", "I", "V", "I"]],
-    2: [["I", "IV", "V", "I"], ["I", "V", "IV", "I"], ["I", "ii", "V", "I"]],
+    1: [["I", "V", "V", "I"], ["I", "IV", "V", "I"], ["I", "I", "V", "I"], ["vi", "IV", "V", "I"]],
+    2: [["I", "IV", "V", "I"], ["I", "V", "IV", "I"], ["I", "ii", "V", "I"], ["vi", "ii", "V", "I"]],
     3: [["I", "ii", "V", "I"], ["I", "IV", "V", "I"], ["I", "vi", "V", "I"]],
     4: [["I", "vi", "ii", "V"], ["I", "IV", "V", "I"], ["I", "ii", "V", "I"]],
     5: [["I", "vi", "ii", "V"], ["I", "IV", "ii", "V"], ["I", "ii", "V", "I"]],
