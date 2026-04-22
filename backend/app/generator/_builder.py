@@ -12,6 +12,7 @@ from ._chord import (
     _chord_tones_in_pool,
     _weights_for_hand,
     _lh_bass_pitch,
+    _preferred_left_families,
     _apply_right_hand_seconds,
     _apply_right_hand_harmonic_punctuations,
 )
@@ -136,7 +137,32 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
         "repeated": 0.8, "octave-support": 0.7,
         "arpeggio-support": 0.4, "simple-broken": 0.3, "alberti": 0.3,
     }
-    lh_weights = [_LH_FAMILY_WEIGHT.get(f, 0.5) for f in available_lh]
+    preferred_lh = set(_preferred_left_families(request, available_lh))
+    coordination_style = str(request.get("coordinationStyle", "support"))
+    hand_activity = str(request.get("handActivity", "both"))
+    reading_focus = str(request.get("readingFocus", "balanced"))
+    requested_pattern = str(request.get("leftHandPattern", "held"))
+
+    lh_weights: list[float] = []
+    for family in available_lh:
+        weight = _LH_FAMILY_WEIGHT.get(family, 0.5)
+        if family in preferred_lh:
+            weight *= 2.35
+        if grade <= 2 and hand_activity == "both":
+            if coordination_style == "together":
+                if family in {"block-half", "bass-and-chord", "block-quarter"}:
+                    weight *= 1.6
+                elif family == "held":
+                    weight *= 0.48
+            elif coordination_style == "support" and family in {"block-half", "bass-and-chord", "support-bass"}:
+                weight *= 1.2
+        if reading_focus == "harmonic" and family in {"block-half", "bass-and-chord", "block-quarter"}:
+            weight *= 1.15
+        if reading_focus == "melodic" and family in {"support-bass", "simple-broken", "arpeggio-support"}:
+            weight *= 1.15
+        if requested_pattern == "held" and family in {"block-half", "bass-and-chord"}:
+            weight *= 1.2
+        lh_weights.append(max(weight, 0.05))
     piece_lh_family = rng.choices(available_lh, weights=lh_weights, k=1)[0]
 
     # Phase 6: lock archetype and contour at piece level to reduce entropy.

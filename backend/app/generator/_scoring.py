@@ -1135,6 +1135,7 @@ def _bass_function_score(events: list[dict[str, Any]], phrase_plans: list[dict[s
         if not isinstance(bass_plan, BassLinePlan):
             continue
         previous_bass: int | None = None
+        previous_planned_bass: int | None = None
         for measure_number in phrase_plan.get("measures", []):
             measure_events = [
                 event
@@ -1164,17 +1165,226 @@ def _bass_function_score(events: list[dict[str, Any]], phrase_plans: list[dict[s
             if previous_bass is not None:
                 interval = abs(actual_bass - previous_bass)
                 motion_role = str(bass_plan.motion_roles.get(int(measure_number), "step"))
+                planned_interval = (
+                    abs(planned_bass - previous_planned_bass)
+                    if planned_bass is not None and previous_planned_bass is not None
+                    else None
+                )
                 if motion_role == "hold":
                     motion_score = 1.0 if interval <= 2 else 0.55
                 elif motion_role == "step":
-                    motion_score = 1.0 if interval <= 5 else 0.5
+                    if interval == 0:
+                        motion_score = 0.16 if planned_interval is None or planned_interval >= 2 else 0.34
+                    elif interval <= 5:
+                        motion_score = 1.0
+                    elif interval <= 7:
+                        motion_score = 0.68
+                    else:
+                        motion_score = 0.42
                 elif motion_role == "leap":
-                    motion_score = 1.0 if 4 <= interval <= 9 else 0.62
+                    if interval == 0:
+                        motion_score = 0.12
+                    else:
+                        motion_score = 1.0 if 4 <= interval <= 9 else 0.54
                 else:
                     motion_score = 1.0 if interval <= 7 else 0.55
             scores.append(0.58 * target_score + 0.42 * motion_score)
             previous_bass = actual_bass
+            previous_planned_bass = planned_bass if planned_bass is not None else previous_planned_bass
     return _mean(scores, default=0.74)
+
+
+def _motion_diversity_score(pitches: list[int]) -> float:
+    if len(pitches) < 2:
+        return 0.72
+    unique_count = len(set(int(round(pitch_value)) for pitch_value in pitches))
+    return max(0.0, min(1.0, (unique_count - 1) / max(1, len(pitches) - 1)))
+
+
+def _anchor_motion_score(actual_delta: float, target_delta: float | None) -> float:
+    interval = abs(actual_delta)
+    if interval < 0.5:
+        return 0.08 if target_delta is None or abs(target_delta) >= 0.5 else 0.2
+
+    if interval <= 2:
+        base = 1.0
+    elif interval <= 5:
+        base = 0.86
+    elif interval <= 9:
+        base = 0.7
+    else:
+        base = 0.48
+
+    if target_delta is None or abs(target_delta) < 0.5:
+        return min(1.0, base * 0.92)
+    if math.copysign(1, actual_delta) == math.copysign(1, target_delta):
+        return min(1.0, base + 0.08)
+    return max(0.12, base - 0.34)
+
+
+def _rh_visible_motion_score(events: list[dict[str, Any]], phrase_plans: list[dict[str, Any]]) -> float:
+    scores: list[float] = []
+    for phrase_plan in phrase_plans:
+        measures = [int(measure_number) for measure_number in phrase_plan.get("measures", [])]
+        if not measures:
+            continue
+
+        entries: list[int] = []
+        planned_targets: list[int | None] = []
+        for measure_number in measures:
+            measure_events = [
+                event
+                for event in _measure_events_for_hand(events, "rh", measure_number)
+                if not event["isRest"] and event.get("pitches")
+            ]
+            if not measure_events:
+                continue
+            actual_entry = next(
+                (int(pitch_value) for pitch_value in (_rh_lead_pitch(event) for event in measure_events) if pitch_value is not None),
+                None,
+            )
+            if actual_entry is None:
+                continue
+            planned_target = next(
+                (
+                    int(event["plannedTopPitch"])
+                    for event in measure_events
+                    if event.get("plannedTopPitch") is not None
+                ),
+                None,
+            )
+            entries.append(actual_entry)
+            planned_targets.append(planned_target)
+
+        if len(entries) < 2:
+            continue
+
+        core_entries = entries[:-1] if len(entries) > 2 else list(entries)
+        core_targets = planned_targets[:len(core_entries)]
+        transition_scores: list[float] = []
+        for index in range(1, len(core_entries)):
+            target_delta = None
+            previous_target = core_targets[index - 1]
+            current_target = core_targets[index]
+            if previous_target is not None and current_target is not None:
+                target_delta = float(current_target - previous_target)
+            transition_scores.append(
+                _anchor_motion_score(float(core_entries[index] - core_entries[index - 1]), target_delta)
+            )
+
+        contour = str(phrase_plan.get("_contour", "flat"))
+        if contour == "ascending":
+            contour_score = 1.0 if core_entries[-1] > core_entries[0] else 0.25
+        elif contour == "descending":
+            contour_score = 1.0 if core_entries[-1] < core_entries[0] else 0.25
+        elif contour == "arch":
+            peak_index = max(range(len(core_entries)), key=core_entries.__getitem__)
+            contour_score = 1.0 if 0 < peak_index < len(core_entries) - 1 else 0.4
+        elif contour == "valley":
+            trough_index = min(range(len(core_entries)), key=core_entries.__getitem__)
+            contour_score = 1.0 if 0 < trough_index < len(core_entries) - 1 else 0.4
+        else:
+            contour_score = 0.8 if _motion_diversity_score(core_entries) >= 0.5 else 0.35
+
+        scores.append(
+            0.55 * _mean(transition_scores, default=0.66)
+            + 0.30 * _motion_diversity_score(core_entries)
+            + 0.15 * contour_score
+        )
+    return _mean(scores, default=0.72)
+
+
+def _lh_visible_motion_score(events: list[dict[str, Any]], phrase_plans: list[dict[str, Any]]) -> float:
+    scores: list[float] = []
+    for phrase_plan in phrase_plans:
+        bass_plan = phrase_plan.get("_bassLinePlan")
+        if not isinstance(bass_plan, BassLinePlan):
+            continue
+
+        measures = [int(measure_number) for measure_number in phrase_plan.get("measures", [])]
+        actual_basses: list[int] = []
+        planned_basses: list[int | None] = []
+        actual_measures: list[int] = []
+        for measure_number in measures:
+            measure_events = [
+                event
+                for event in _measure_events_for_hand(events, "lh", measure_number)
+                if not event["isRest"] and event.get("pitches")
+            ]
+            if not measure_events:
+                continue
+            actual_bass = next(
+                (int(pitch_value) for pitch_value in (_lh_bass_pitch(event) for event in measure_events) if pitch_value is not None),
+                None,
+            )
+            if actual_bass is None:
+                continue
+            planned_bass = next(
+                (
+                    int(event["plannedBassPitch"])
+                    for event in measure_events
+                    if event.get("plannedBassPitch") is not None
+                ),
+                None,
+            )
+            actual_basses.append(actual_bass)
+            planned_basses.append(planned_bass)
+            actual_measures.append(measure_number)
+
+        if len(actual_basses) < 2:
+            continue
+
+        core_basses = actual_basses[:-1] if len(actual_basses) > 2 else list(actual_basses)
+        core_targets = planned_basses[:len(core_basses)]
+        core_measures = actual_measures[:len(core_basses)]
+        transition_scores: list[float] = []
+        for index in range(1, len(core_basses)):
+            actual_delta = float(core_basses[index] - core_basses[index - 1])
+            target_delta = None
+            previous_target = core_targets[index - 1]
+            current_target = core_targets[index]
+            if previous_target is not None and current_target is not None:
+                target_delta = float(current_target - previous_target)
+            role = str(bass_plan.motion_roles.get(core_measures[index], "step"))
+            if role == "hold":
+                transition_scores.append(1.0 if abs(actual_delta) <= 2 else 0.55)
+                continue
+            transition_scores.append(_anchor_motion_score(actual_delta, target_delta))
+
+        scores.append(
+            0.62 * _mean(transition_scores, default=0.64)
+            + 0.38 * _motion_diversity_score(core_basses)
+        )
+    return _mean(scores, default=0.7)
+
+
+def _visible_motion_score(
+    request: dict[str, Any],
+    events: list[dict[str, Any]],
+    phrase_plans: list[dict[str, Any]],
+) -> float:
+    rh_score = _rh_visible_motion_score(events, phrase_plans)
+    lh_score = _lh_visible_motion_score(events, phrase_plans)
+    hand_activity = str(request.get("handActivity", "both"))
+    coordination_style = str(request.get("coordinationStyle", "support"))
+    grade = int(request.get("grade", 1))
+
+    if hand_activity == "right-only":
+        return rh_score
+    if hand_activity == "left-only":
+        return lh_score
+
+    harmonic = (
+        (2.0 * rh_score * lh_score) / (rh_score + lh_score)
+        if rh_score > 0.0 and lh_score > 0.0
+        else 0.0
+    )
+    combined = 0.58 * rh_score + 0.42 * lh_score
+    if coordination_style == "together":
+        combined = 0.25 * combined + 0.75 * harmonic
+    if grade <= 2 and coordination_style == "together":
+        combined = 0.15 * combined + 0.85 * harmonic
+    return combined
 
 
 def _foreground_background_clarity_score(events: list[dict[str, Any]]) -> float:
@@ -1340,6 +1550,7 @@ def _evaluate_candidate(request: dict[str, Any], candidate: dict[str, Any]) -> E
     hierarchy_score = _rh_lh_hierarchy_score(events)
     top_line_score = _top_line_strength_score(events, phrase_plans)
     bass_score = _bass_function_score(events, phrase_plans)
+    visible_motion_score = _visible_motion_score(request, events, phrase_plans)
     foreground_score = _foreground_background_clarity_score(events)
     vertical_score = _vertical_balance_score(events)
     difficulty_score = _difficulty_smoothness_score(request, events, phrase_plans)
@@ -1363,6 +1574,7 @@ def _evaluate_candidate(request: dict[str, Any], candidate: dict[str, Any]) -> E
         (hierarchy_score, 0.95),
         (top_line_score, 1.65),
         (bass_score, 1.2),
+        (visible_motion_score, 1.7),
         (foreground_score, 1.45),
         (vertical_score, 1.25),
         (difficulty_score, 1.15),
@@ -1388,6 +1600,7 @@ def _evaluate_candidate(request: dict[str, Any], candidate: dict[str, Any]) -> E
         accidental_justification=accidental_score,
         top_line_strength=top_line_score,
         bass_function=bass_score,
+        visible_motion=visible_motion_score,
         foreground_background_clarity=foreground_score,
         vertical_balance=vertical_score,
         total=total,
@@ -1402,6 +1615,7 @@ def _quality_gate_result(
     grade = int(request["grade"])
     events = candidate["events"]
     phrase_plans = candidate.get("phrasePlans", [])
+    strict_visible_motion = False
 
     # Phase 5: grade-specific quality gate thresholds for ALL grades.
     if grade >= 5:
@@ -1454,16 +1668,25 @@ def _quality_gate_result(
         leniency_gate = 0.94
         leniency_total = 0.65
     else:
-        # Grades 1-2: basic sanity checks
+        # Grades 1-2: keep outputs simple, but still require visible motion so
+        # desktop notation does not flatten into the same bar anchors repeatedly.
+        visible_motion_threshold = (
+            0.60
+            if str(request.get("handActivity", "both")) == "both"
+            and str(request.get("coordinationStyle", "support")) == "together"
+            else 0.42
+        )
         checks = [
-            ("overall total", evaluation.total, 0.55),
+            ("overall total", evaluation.total, 0.58),
             ("phrase coherence", evaluation.phrase_coherence, 0.50),
             ("cadence preparation", evaluation.cadence_preparation, 0.60),
+            ("visible motion", evaluation.visible_motion, visible_motion_threshold),
         ]
-        hard_checks = {"cadence preparation"}
-        leniency_max_reasons = 2
-        leniency_gate = 0.92
-        leniency_total = 0.58
+        hard_checks = {"cadence preparation", "visible motion"}
+        leniency_max_reasons = 1
+        leniency_gate = 0.95
+        leniency_total = 0.62
+        strict_visible_motion = True
 
     reasons: list[str] = []
     normalized_scores: list[float] = []
@@ -1473,6 +1696,8 @@ def _quality_gate_result(
         normalized_scores.append(normalized)
         if value + 1e-9 < threshold:
             reasons.append(label)
+            if strict_visible_motion and label == "visible motion":
+                hard_fail = True
             if label in hard_checks and value < threshold - 0.04:
                 hard_fail = True
 
