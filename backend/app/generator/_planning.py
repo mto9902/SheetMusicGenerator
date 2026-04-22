@@ -1107,6 +1107,7 @@ def _build_top_line_plan(
     answer_form: str,
     style_profile: StyleProfile,
     piece_plan: PiecePlan,
+    phrase_grammar: PhraseGrammar | None = None,
 ) -> TopLinePlan:
     register_targets: dict[int, float] = {}
     pitch_roles: dict[int, str] = {}
@@ -1133,14 +1134,23 @@ def _build_top_line_plan(
         )
         measure_role = role_by_measure.get(measure_number, "develop")
         if style_profile.grade <= 2 and measure_role == "establish" and index == 0:
+            opening_energy = float(phrase_grammar.opening_energy) if phrase_grammar is not None else 0.5
+            normalized_energy = max(0.0, min(1.0, (opening_energy - 0.35) / 0.30))
+            opening_floor = 0.42 if phrase_index == 0 else 0.38
+            opening_ceiling = 0.68 if phrase_index == 0 else 0.62
+            opening_target = opening_floor + (opening_ceiling - opening_floor) * normalized_energy
+            if contour == "ascending":
+                opening_target += 0.04
+            elif contour == "descending":
+                opening_target -= 0.03
             register_targets[measure_number] = max(
                 register_targets[measure_number],
-                0.88 if phrase_index == 0 else 0.8,
+                max(style_profile.register_span[0], min(style_profile.register_span[1], opening_target)),
             )
         elif style_profile.grade <= 2 and measure_number == peak_measure:
             register_targets[measure_number] = max(
                 register_targets[measure_number],
-                0.84 if phrase_index == 0 else 0.76,
+                0.78 if phrase_index == 0 else 0.72,
             )
         pitch_roles[measure_number] = _top_pitch_role_for_measure(
             measure_role,
@@ -1776,6 +1786,7 @@ def _pick_phrase_plan(
         answer_form,
         style_profile,
         piece_plan,
+        phrase_grammar=phrase_grammar,
     )
     bass_line_plan = _build_bass_line_plan(
         phrase_index,

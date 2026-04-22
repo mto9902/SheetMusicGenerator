@@ -216,11 +216,18 @@ def _harmonic_plan(
             and rng.random() < 0.8
         ):
             opening_choices = ["IV", "V", "vi"] if not minor else ["iv", "V", "VI"]
+            opening_weights = [1.2, 1.0, 0.65]
             if len(progression) > 1:
-                filtered_choices = [choice for choice in opening_choices if choice != progression[1]]
+                filtered_pairs = [
+                    (choice, weight)
+                    for choice, weight in zip(opening_choices, opening_weights, strict=False)
+                    if choice != progression[1]
+                ]
+                filtered_choices = [choice for choice, _weight in filtered_pairs]
                 if filtered_choices:
                     opening_choices = filtered_choices
-            progression[0] = rng.choice(opening_choices)
+                    opening_weights = [weight for _choice, weight in filtered_pairs]
+            progression[0] = rng.choices(opening_choices, weights=opening_weights, k=1)[0]
 
         if cadence_strength == "weak":
             progression[-1] = "V"

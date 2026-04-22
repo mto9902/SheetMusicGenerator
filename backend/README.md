@@ -27,6 +27,23 @@ pip install -r requirements.txt
 
 If pip still tries to build Verovio from source on your local Python version, use Python 3.12 or 3.13 for the backend virtual environment.
 
+## Pre-deploy checks
+
+Run these before pushing backend generator changes:
+
+```powershell
+cd C:\Users\Lux\SheetGenerator
+python -m compileall backend/app
+python -m unittest backend.tests.test_generator_regressions
+```
+
+Or use the helper script:
+
+```powershell
+cd C:\Users\Lux\SheetGenerator
+powershell -ExecutionPolicy Bypass -File .\backend\scripts\predeploy_backend_checks.ps1
+```
+
 ## Notes
 
 - `music21` generates grand-staff MusicXML for piano and anchored rhythm exercises.
