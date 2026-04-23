@@ -1358,6 +1358,34 @@ def _lh_visible_motion_score(events: list[dict[str, Any]], phrase_plans: list[di
     return _mean(scores, default=0.7)
 
 
+def _neighbor_motion_penalty(events: list[dict[str, Any]]) -> float:
+    """Fraction of RH 3-note windows that are x-y-x neighbor patterns.
+
+    Returns a value in [0.0, 1.0].  Penalizes sample-by-sample neighbor
+    wiggle where the melody departs one step and returns immediately —
+    a beginner-engine tell that SRF-style output doesn't have.
+    """
+    rh_pitches: list[int] = []
+    for event in events:
+        if event.get("hand") != "rh":
+            continue
+        if event.get("isRest"):
+            continue
+        pitches = event.get("pitches") or []
+        if not pitches:
+            continue
+        rh_pitches.append(max(int(pitch_value) for pitch_value in pitches))
+    if len(rh_pitches) < 3:
+        return 0.0
+    windows = len(rh_pitches) - 2
+    neighbor = 0
+    for idx in range(windows):
+        first, mid, third = rh_pitches[idx], rh_pitches[idx + 1], rh_pitches[idx + 2]
+        if first == third and first != mid and abs(mid - first) <= 2:
+            neighbor += 1
+    return neighbor / windows if windows else 0.0
+
+
 def _visible_motion_score(
     request: dict[str, Any],
     events: list[dict[str, Any]],
@@ -1368,6 +1396,14 @@ def _visible_motion_score(
     hand_activity = str(request.get("handActivity", "both"))
     coordination_style = str(request.get("coordinationStyle", "support"))
     grade = int(request.get("grade", 1))
+
+    # Apply a neighbor-motion penalty so candidates that wiggle back to the
+    # same pitch (E-D-E, F-G-F, ...) score lower and the multi-candidate
+    # search can reject them.  Penalty is capped so some neighbor figures
+    # stay acceptable — it's excess that we punish, not their existence.
+    neighbor_ratio = _neighbor_motion_penalty(events)
+    neighbor_factor = 1.0 - min(0.25, max(0.0, (neighbor_ratio - 0.25)) * 0.9)
+    rh_score = max(0.0, rh_score * neighbor_factor)
 
     if hand_activity == "right-only":
         return rh_score

@@ -913,42 +913,419 @@ def _realize_line_measure(
     return events, prev_pitch, recent, direction, cursor, last_event
 
 
+# Final-bar RH cadence templates: (name, [(duration, scale_degree), ...], min_grade, weight).
+# Scale degrees: 1=tonic, 2=supertonic, 3=mediant, 5=dominant.
+# Every template MUST end on scale degree 1.  The penultimate bar currently
+# resolves to 2̂ (supertonic), so templates starting on 1, 2, or 3 read
+# smoothly.
+_RH_FINAL_CADENCE_TEMPLATES: dict[str, list[tuple[str, list[tuple[float, int]], int, float]]] = {
+    "4/4": [
+        ("whole",        [(4.0, 1)],                                  1, 0.55),
+        ("half_half",    [(2.0, 1), (2.0, 1)],                        1, 1.10),
+        ("q_dotted",     [(1.0, 1), (3.0, 1)],                        1, 0.95),
+        ("dotted_q",     [(3.0, 1), (1.0, 1)],                        2, 0.75),
+        ("qqh_121",      [(1.0, 1), (1.0, 2), (2.0, 1)],              2, 0.95),
+        ("qqh_321",      [(1.0, 3), (1.0, 2), (2.0, 1)],              2, 1.00),
+        ("hh_31",        [(2.0, 3), (2.0, 1)],                        2, 0.70),
+        ("qqqq_1321",    [(1.0, 1), (1.0, 3), (1.0, 2), (1.0, 1)],    3, 0.85),
+    ],
+    "3/4": [
+        ("dotted_half",  [(3.0, 1)],                                  1, 0.60),
+        ("hq_11",        [(2.0, 1), (1.0, 1)],                        1, 1.00),
+        ("qh_11",        [(1.0, 1), (2.0, 1)],                        1, 1.00),
+        ("qqq_321",      [(1.0, 3), (1.0, 2), (1.0, 1)],              2, 1.05),
+        ("qqq_121",      [(1.0, 1), (1.0, 2), (1.0, 1)],              2, 0.90),
+    ],
+    "2/4": [
+        ("half",         [(2.0, 1)],                                  1, 0.55),
+        ("qq_31",        [(1.0, 3), (1.0, 1)],                        1, 1.00),
+        ("qq_21",        [(1.0, 2), (1.0, 1)],                        1, 1.00),
+        ("qq_11",        [(1.0, 1), (1.0, 1)],                        1, 0.80),
+    ],
+    "6/8": [
+        ("dotted_half",  [(3.0, 1)],                                  1, 0.70),
+        ("dq_dq_11",     [(1.5, 1), (1.5, 1)],                        1, 1.00),
+        ("dq_dq_31",     [(1.5, 3), (1.5, 1)],                        2, 0.90),
+    ],
+}
+
+
+# Final-bar LH cadence templates: (name, [(duration, degrees_as_tuple)], min_grade, weight).
+# degrees_as_tuple is scale degrees stacked as a chord in LH (e.g. (1,) for
+# tonic alone, (1, 5) for tonic + fifth, (1,) fifth-less).
+# These are chosen independently of the RH template so patterns don't lock
+# together; they always sound tonic because every sonority is on scale-degree 1.
+_LH_FINAL_CADENCE_TEMPLATES: dict[str, list[tuple[str, list[tuple[float, tuple[int, ...]]], int, float]]] = {
+    "4/4": [
+        ("whole_root",        [(4.0, (1,))],                                   1, 0.80),
+        ("whole_chord",       [(4.0, (1, 5))],                                 3, 0.70),
+        ("half_half_root",    [(2.0, (1,)), (2.0, (1,))],                      1, 0.95),
+        ("half_half_chord",   [(2.0, (1, 5)), (2.0, (1, 5))],                  2, 0.90),
+        ("q_dotted_root",     [(1.0, (1,)), (3.0, (1,))],                      1, 0.85),
+        ("dotted_q_root",     [(3.0, (1,)), (1.0, (1,))],                      2, 0.65),
+        ("h_h_root_chord",    [(2.0, (1,)), (2.0, (1, 5))],                    2, 0.70),
+    ],
+    "3/4": [
+        ("dotted_half_root",  [(3.0, (1,))],                                   1, 0.90),
+        ("dotted_half_chord", [(3.0, (1, 5))],                                 3, 0.70),
+        ("hq_root",           [(2.0, (1,)), (1.0, (1,))],                      1, 0.95),
+        ("qh_root",           [(1.0, (1,)), (2.0, (1,))],                      1, 0.95),
+    ],
+    "2/4": [
+        ("half_root",         [(2.0, (1,))],                                   1, 0.85),
+        ("half_chord",        [(2.0, (1, 5))],                                 3, 0.65),
+        ("qq_root",           [(1.0, (1,)), (1.0, (1,))],                      1, 0.90),
+    ],
+    "6/8": [
+        ("dotted_half_root",  [(3.0, (1,))],                                   1, 0.95),
+        ("dq_dq_root",        [(1.5, (1,)), (1.5, (1,))],                      1, 0.85),
+    ],
+}
+
+
+def _pick_cadence_template(
+    templates: list[tuple[str, list, int, float]],
+    grade: int,
+    rng: random.Random,
+) -> tuple[str, list]:
+    eligible = [(n, pattern, weight) for (n, pattern, mg, weight) in templates if grade >= mg]
+    if not eligible:
+        name, pattern, _, _ = templates[0]
+        return name, pattern
+    names = [n for (n, _p, _w) in eligible]
+    patterns = [p for (_n, p, _w) in eligible]
+    weights = [w for (_n, _p, w) in eligible]
+    choice_idx = rng.choices(range(len(eligible)), weights=weights, k=1)[0]
+    return names[choice_idx], patterns[choice_idx]
+
+
+def _scale_degree_to_pitch(
+    pool: list[int],
+    key_signature: str,
+    degree: int,
+    near_pitch: int,
+) -> int | None:
+    """Resolve a diatonic scale degree (1-based) to a MIDI pitch from the pool.
+
+    Picks the pool pitch in the requested scale-degree closest to near_pitch.
+    Returns None if no pool pitch matches.
+    """
+    scale = sorted(_key_pitch_classes(key_signature))
+    if not scale:
+        return None
+    tonic_pc = KEY_TONIC_PITCH_CLASS.get(key_signature, scale[0])
+    try:
+        tonic_idx = scale.index(tonic_pc)
+    except ValueError:
+        tonic_idx = 0
+    target_pc = scale[(tonic_idx + (degree - 1)) % len(scale)]
+    candidates = [p for p in pool if p % 12 == target_pc]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda c: abs(c - near_pitch))
+
+
 def _apply_piece_ending(
     events: list[dict[str, Any]],
     pool: list[int],
     key_signature: str,
     prev_pitch: int,
     total: float,
+    time_signature: str = "4/4",
+    grade: int = 1,
+    rng: random.Random | None = None,
 ) -> None:
-    """Rewrite the final measure as a definitive ending.
+    """Rewrite the final measure using a cadence template bank.
 
-    Replace all events with a single whole-note (or measure-length) tonic,
-    with a fermata.  This guarantees a clean, unmistakable ending regardless
-    of what the content builder produced.
+    Picks one RH cadence template per call so pieces don't all collapse to a
+    tonic whole note.  The last note always resolves to scale-degree 1 so the
+    ending still reads as definitive.
     """
     if not events:
         return
 
     tonic_pc = KEY_TONIC_PITCH_CLASS.get(key_signature, 0)
     tonic_candidates = [p for p in pool if p % 12 == tonic_pc]
-    tonic_pitch = (
+    fallback_tonic = (
         min(tonic_candidates, key=lambda c: abs(c - prev_pitch))
         if tonic_candidates
         else prev_pitch
     )
 
-    # Replace all events with a single tonic whole note + fermata
+    templates = _RH_FINAL_CADENCE_TEMPLATES.get(time_signature)
     hand = events[0].get("hand", "rh")
+    effective_rng = rng if rng is not None else random.Random(0)
+
+    # If we have no template bank for this meter, fall back to the legacy
+    # whole-note ending so rare meters still produce a valid output.
+    if not templates:
+        events.clear()
+        events.append({
+            "hand": hand,
+            "offset": 0.0,
+            "quarterLength": total,
+            "isRest": False,
+            "pitches": [fallback_tonic],
+            "technique": "final tonic",
+            "fermata": True,
+        })
+        return
+
+    template_name, pattern = _pick_cadence_template(templates, grade, effective_rng)
+
+    # Verify the pattern sums to `total` (defensive — avoid malformed bar).
+    pattern_total = round(sum(dur for dur, _deg in pattern), 3)
+    if abs(pattern_total - round(total, 3)) > 0.01:
+        # Degrade to a whole-note tonic if template doesn't fit.
+        events.clear()
+        events.append({
+            "hand": hand,
+            "offset": 0.0,
+            "quarterLength": total,
+            "isRest": False,
+            "pitches": [fallback_tonic],
+            "technique": "final tonic",
+            "fermata": True,
+        })
+        return
+
     events.clear()
-    events.append({
-        "hand": hand,
-        "offset": 0.0,
-        "quarterLength": total,
-        "isRest": False,
-        "pitches": [tonic_pitch],
-        "technique": "final tonic",
-        "fermata": True,
-    })
+    offset = 0.0
+    near_pitch = prev_pitch
+    for idx, (duration, degree) in enumerate(pattern):
+        pitch = _scale_degree_to_pitch(pool, key_signature, degree, near_pitch)
+        if pitch is None:
+            pitch = fallback_tonic
+        is_last = (idx == len(pattern) - 1)
+        event: dict[str, Any] = {
+            "hand": hand,
+            "offset": round(offset, 3),
+            "quarterLength": float(duration),
+            "isRest": False,
+            "pitches": [pitch],
+            "technique": "final cadence" if not is_last else "final tonic",
+        }
+        if is_last:
+            event["fermata"] = True
+        events.append(event)
+        offset += float(duration)
+        near_pitch = pitch
+
+
+def _apply_lh_variation_pass(
+    events: list[dict[str, Any]],
+    total: float,
+    measure_count: int,
+    rng: random.Random,
+) -> list[dict[str, Any]]:
+    """Break up runs of identical LH rhythmic shapes.
+
+    When the LH uses the same per-measure rhythmic shape for ≥3 consecutive
+    bars, rewrites the 3rd (and every 2nd thereafter) bar into a simpler
+    block-half shape using the same pitches.  Sight-reading material breaks
+    LH textures every 2-3 bars — perpetual Alberti or perpetual repeated-note
+    patterns are a strong "engine-generated" tell.
+    """
+    from collections import defaultdict
+
+    # Group LH events by measure (never touch the final bar — it owns its
+    # own cadence template).
+    lh_by_measure: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    other_events: list[dict[str, Any]] = []
+    final_measure = int(measure_count)
+    for ev in events:
+        if ev.get("hand") == "lh" and int(ev.get("measure", 0)) != final_measure:
+            lh_by_measure[int(ev["measure"])].append(ev)
+        else:
+            other_events.append(ev)
+
+    if not lh_by_measure:
+        return events
+
+    # Build per-measure rhythm signatures: tuple of (quarterLength, pitch_count, is_rest).
+    def _sig(measure_events: list[dict[str, Any]]) -> tuple:
+        return tuple(
+            (
+                round(float(e.get("quarterLength", 1.0)), 3),
+                len(e.get("pitches", [])),
+                bool(e.get("isRest", False)),
+            )
+            for e in measure_events
+        )
+
+    sorted_measures = sorted(lh_by_measure)
+    signatures = [_sig(lh_by_measure[m]) for m in sorted_measures]
+
+    # Find runs of identical signatures of length >= 3.
+    to_vary: set[int] = set()
+    run_start = 0
+    while run_start < len(signatures):
+        run_end = run_start
+        while run_end + 1 < len(signatures) and signatures[run_end + 1] == signatures[run_start]:
+            run_end += 1
+        run_len = run_end - run_start + 1
+        if run_len >= 3:
+            # Mark every other bar starting from the 3rd of the run for variation.
+            for offset_in_run in range(2, run_len, 2):
+                to_vary.add(sorted_measures[run_start + offset_in_run])
+        run_start = run_end + 1
+
+    if not to_vary:
+        return events
+
+    for measure_number in to_vary:
+        measure_events = lh_by_measure[measure_number]
+        if not measure_events:
+            continue
+        # Collect pool of pitches used this bar — we'll preserve harmony by
+        # using the lowest as bass + (optionally) the next above within an
+        # octave as the chord tone.
+        pitches: set[int] = set()
+        for e in measure_events:
+            if not e.get("isRest"):
+                for p in e.get("pitches", []):
+                    pitches.add(int(p))
+        if not pitches:
+            continue
+        sorted_pitches = sorted(pitches)
+        bass = sorted_pitches[0]
+        chord: list[int] = [bass]
+        for candidate in sorted_pitches[1:]:
+            if candidate - bass <= 12 and candidate != bass:
+                chord.append(candidate)
+                break
+
+        # Pick a simpler shape — prefer block-half, sometimes held whole.
+        # Draw from a fixed palette so variation reads as deliberate, not random.
+        base_offset = float(measure_events[0].get("offset", 0.0))
+        # Preserve the upstream metadata so downstream passes (ties,
+        # articulation, dynamics) still find the right bar context.
+        template_event = measure_events[0]
+        metadata = {
+            k: template_event.get(k)
+            for k in (
+                "measure",
+                "harmony",
+                "phraseIndex",
+                "phraseCadence",
+                "leftFamily",
+                "measureRole",
+                "targetDensity",
+                "phraseContour",
+                "rhTexture",
+            )
+            if k in template_event
+        }
+
+        palette = [
+            ("block_half", [(total / 2.0, sorted(chord)), (total / 2.0, sorted(chord))], 1.0),
+            ("held_chord", [(total, sorted(chord))], 0.85),
+            ("bass_then_chord", [(total / 2.0, [bass]), (total / 2.0, sorted(chord))], 0.8),
+        ]
+        names = [p[0] for p in palette]
+        weights = [p[2] for p in palette]
+        choice_idx = rng.choices(range(len(palette)), weights=weights, k=1)[0]
+        _name, shape, _w = palette[choice_idx]
+
+        rebuilt: list[dict[str, Any]] = []
+        cursor = 0.0
+        for dur, chord_pitches in shape:
+            ev: dict[str, Any] = {
+                "hand": "lh",
+                "offset": round(base_offset + cursor, 3),
+                "quarterLength": float(dur),
+                "isRest": False,
+                "pitches": list(chord_pitches),
+                "technique": "lh variation",
+                **metadata,
+            }
+            rebuilt.append(ev)
+            cursor += float(dur)
+        lh_by_measure[measure_number] = rebuilt
+
+    # Reassemble the event list, preserving insertion order by measure/offset.
+    rebuilt_lh: list[dict[str, Any]] = []
+    for m in sorted_measures:
+        rebuilt_lh.extend(lh_by_measure[m])
+
+    # Merge with RH + final-bar LH events and re-sort by (measure, offset, hand).
+    merged = other_events + rebuilt_lh
+    merged.sort(key=lambda e: (int(e.get("measure", 0)), float(e.get("offset", 0.0)), 0 if e.get("hand") == "rh" else 1))
+    return merged
+
+
+def _apply_lh_piece_ending(
+    pool: list[int],
+    key_signature: str,
+    prev_bass_pitch: int,
+    total: float,
+    time_signature: str,
+    grade: int,
+    rng: random.Random,
+) -> list[dict[str, Any]]:
+    """Build the LH final measure using the LH cadence template bank.
+
+    Returns a freshly-built list of LH events for the final bar.  All sonorities
+    are tonic-rooted so the piece still resolves cleanly.
+    """
+    tonic_pc = KEY_TONIC_PITCH_CLASS.get(key_signature, 0)
+    tonic_candidates = [p for p in pool if p % 12 == tonic_pc]
+    if tonic_candidates:
+        bass_note = min(tonic_candidates, key=lambda c: abs(c - prev_bass_pitch))
+    else:
+        bass_note = prev_bass_pitch
+
+    fifth_pc = (tonic_pc + 7) % 12
+    fifth_above = next(
+        (p for p in sorted(pool) if p % 12 == fifth_pc and p > bass_note and p - bass_note <= 12),
+        None,
+    )
+
+    templates = _LH_FINAL_CADENCE_TEMPLATES.get(time_signature)
+    if not templates:
+        return [{
+            "hand": "lh",
+            "offset": 0.0,
+            "quarterLength": total,
+            "isRest": False,
+            "pitches": [bass_note],
+            "technique": "final chord",
+            "fermata": True,
+        }]
+
+    _name, pattern = _pick_cadence_template(templates, grade, rng)
+    pattern_total = round(sum(dur for dur, _degs in pattern), 3)
+    if abs(pattern_total - round(total, 3)) > 0.01:
+        return [{
+            "hand": "lh",
+            "offset": 0.0,
+            "quarterLength": total,
+            "isRest": False,
+            "pitches": [bass_note],
+            "technique": "final chord",
+            "fermata": True,
+        }]
+
+    result: list[dict[str, Any]] = []
+    offset = 0.0
+    for idx, (duration, degrees) in enumerate(pattern):
+        pitches: list[int] = [bass_note]
+        if 5 in degrees and fifth_above is not None:
+            pitches.append(fifth_above)
+        is_last = (idx == len(pattern) - 1)
+        event: dict[str, Any] = {
+            "hand": "lh",
+            "offset": round(offset, 3),
+            "quarterLength": float(duration),
+            "isRest": False,
+            "pitches": sorted(pitches),
+            "technique": "final chord" if not is_last else "final tonic",
+        }
+        if is_last:
+            event["fermata"] = True
+        result.append(event)
+        offset += float(duration)
+    return result
 
 
 def _apply_penultimate_ending(

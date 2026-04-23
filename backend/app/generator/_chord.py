@@ -590,14 +590,28 @@ def _weights_for_hand(hand: str, preset: dict[str, Any], request: dict[str, Any]
     }
     if hand == "rh":
         motion = str(request.get("rightHandMotion", "mixed"))
+        # These user-visible knobs need to *actually* shape output, not just
+        # nudge it — previously a ±0.14 step-weight delta was indistinguishable
+        # from noise.  Clamp each mode into a distinct band instead.
         if motion == "stepwise":
-            base["stepWeight"] = min(0.96, base["stepWeight"] + 0.14)
-            base["rangeSigma"] = max(2.0, base["rangeSigma"] - 0.6)
+            # Heavy stepwise: rarely leap, stay compact.
+            base["stepWeight"] = 0.95
+            base["rangeSigma"] = max(1.8, base["rangeSigma"] - 0.9)
+            base["allowIntervals"] = ["2nd", "3rd"]
         elif motion == "small-leaps":
-            base["stepWeight"] = max(0.35, base["stepWeight"] - 0.12)
-            base["rangeSigma"] = min(10.0, base["rangeSigma"] + 0.45)
+            # Explicitly encourage leaps: aggressively suppress steps so 3rds
+            # and 4ths dominate; boost chord-tone gravity so leap choices land
+            # on consonant arrivals.
+            base["stepWeight"] = 0.25
+            base["rangeSigma"] = min(10.0, base["rangeSigma"] + 0.7)
+            base["chordToneWeight"] = base["chordToneWeight"] * 1.35
+            existing = list(base.get("allowIntervals", []))
+            for interval in ("3rd", "4th", "5th"):
+                if interval not in existing:
+                    existing.append(interval)
+            base["allowIntervals"] = existing
         elif motion == "mixed":
-            base["stepWeight"] = max(0.4, base["stepWeight"] - 0.04)
+            base["stepWeight"] = 0.70
             base["rangeSigma"] = min(10.0, base["rangeSigma"] + 0.2)
     if hand == "lh":
         # LH anchors harmony more, steps a bit more

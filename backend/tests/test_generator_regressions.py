@@ -161,6 +161,81 @@ class GeneratorRegressionTests(unittest.TestCase):
             msg=f"Bass did not dip below C often enough: {summary}",
         )
 
+    def test_final_bar_rhythm_varies_across_seeds(self) -> None:
+        """Final-bar rhythm signatures should be varied — not always a whole
+        note.  Regression guard against collapsing back to the hard-override
+        ending that made every piece feel identical."""
+        rhythm_signatures: Counter[tuple] = Counter()
+        sample_count = 30
+        for idx in range(sample_count):
+            request = {**BASE_REQUEST, "keySignature": "C", "seed": f"finalvar{idx}"}
+            candidate = _select_candidate(request)
+            self.assertIsNotNone(candidate, msg=f"Generation failed for seed {request['seed']}")
+            events = candidate["events"]  # type: ignore[index]
+            last_measure = int(request["measureCount"])
+            final_events = [
+                event
+                for event in events
+                if event["hand"] == "rh"
+                and int(event["measure"]) == last_measure
+                and not event["isRest"]
+                and event.get("pitches")
+            ]
+            if not final_events:
+                continue
+            signature = tuple(round(float(event["quarterLength"]), 3) for event in final_events)
+            rhythm_signatures[signature] += 1
+
+        self.assertGreaterEqual(
+            len(rhythm_signatures),
+            3,
+            msg=f"Final-bar rhythm was not varied enough: {rhythm_signatures}",
+        )
+        # No single rhythm should dominate more than ~75% of outputs.
+        dominant_share = max(rhythm_signatures.values()) / sample_count
+        self.assertLess(
+            dominant_share,
+            0.75,
+            msg=f"One final-bar rhythm dominated: {rhythm_signatures}",
+        )
+
+    def test_lh_pattern_does_not_repeat_too_many_bars(self) -> None:
+        """LH rhythmic shape should break up at least every ~4 bars instead
+        of sitting on the same pattern for the whole piece."""
+        request = {**BASE_REQUEST, "keySignature": "C", "measureCount": 8, "seed": "lhvary"}
+        candidate = _select_candidate(request)
+        self.assertIsNotNone(candidate)
+        events = candidate["events"]  # type: ignore[index]
+        lh_by_measure: dict[int, list[dict[str, Any]]] = {}
+        for event in events:
+            if event["hand"] != "lh":
+                continue
+            lh_by_measure.setdefault(int(event["measure"]), []).append(event)
+
+        def signature(measure_events: list[dict[str, Any]]) -> tuple:
+            return tuple(
+                (round(float(event["quarterLength"]), 3), len(event.get("pitches", [])))
+                for event in measure_events
+            )
+
+        signatures = [signature(lh_by_measure[m]) for m in sorted(lh_by_measure)]
+        # Excluding the final bar, the longest run of identical signatures
+        # should be < 5 (so the LH doesn't lock into one texture).
+        non_final = signatures[:-1]
+        longest_run = 1
+        current_run = 1
+        for prev, curr in zip(non_final, non_final[1:]):
+            if prev == curr:
+                current_run += 1
+                longest_run = max(longest_run, current_run)
+            else:
+                current_run = 1
+        self.assertLess(
+            longest_run,
+            5,
+            msg=f"LH rhythm signature repeated {longest_run} bars without variation: {signatures}",
+        )
+
     def test_grade1_f_major_openings_keep_variety_and_range(self) -> None:
         summary = _analyze_batch("F", "fgate", 20)
 

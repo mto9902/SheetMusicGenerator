@@ -22,6 +22,8 @@ from ._texture import (
     _replay_rhythm_template,
     _apply_piece_ending,
     _apply_penultimate_ending,
+    _apply_lh_piece_ending,
+    _apply_lh_variation_pass,
 )
 from ._planning import (
     _build_style_profile,
@@ -97,6 +99,15 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
     )
     pool_size = int(piano.get("poolSize", 5))
     max_leap = int(piano.get("maxLeapSemitones", 7))
+    # Harden RH motion selector: clamp max_leap so "stepwise" can't leap and
+    # "small-leaps" gets more room than the base preset.  Weights alone don't
+    # penetrate when top-line targets pre-determine bar boundaries, so this
+    # interval cap is what actually changes the feel of the output.
+    _rh_motion = str(request.get("rightHandMotion", "mixed"))
+    if _rh_motion == "stepwise":
+        max_leap = min(max_leap, 2)
+    elif _rh_motion == "small-leaps":
+        max_leap = max(max_leap, 7)
 
     right_root = HAND_POSITION_ROOTS["rh"][request["handPosition"]]
     left_root = HAND_POSITION_ROOTS["lh"][request["handPosition"]]
@@ -150,6 +161,11 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
         "arpeggio-support": 0.4, "simple-broken": 0.3, "alberti": 0.3,
     }
     preferred_lh = set(_preferred_left_families(request, available_lh))
+    # Honor the user's leftHandPattern selection: if preferred families
+    # intersect with what this grade allows, restrict available_lh to those
+    # preferred families so the user-facing choice actually changes output.
+    if preferred_lh and set(available_lh) & preferred_lh:
+        available_lh = [family for family in available_lh if family in preferred_lh]
     coordination_style = str(request.get("coordinationStyle", "support"))
     hand_activity = str(request.get("handActivity", "both"))
     reading_focus = str(request.get("readingFocus", "balanced"))
@@ -319,6 +335,9 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
                     _apply_piece_ending(
                         rh_events, rh_pool,
                         request["keySignature"], rh_pitch, total,
+                        time_signature=str(request.get("timeSignature", "4/4")),
+                        grade=grade,
+                        rng=rng,
                     )
 
                 for event in _measure_events_with_offsets(measure_number, measure_offset, rh_events):
@@ -350,39 +369,19 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
 
             # === LEFT HAND ===
             if request["handActivity"] != "right-only":
-                # Final measure: override LH to a single held tonic chord.
+                # Final measure: pick from LH cadence templates so the ending
+                # doesn't always collapse to a held tonic.
                 is_piece_final = measure_number == int(request["measureCount"])
                 if is_piece_final:
-                    tonic_pc = KEY_TONIC_PITCH_CLASS.get(request["keySignature"], 0)
-                    tonic_pitches = [p for p in lh_pool if p % 12 == tonic_pc]
-                    if tonic_pitches:
-                        bass_note = min(tonic_pitches)
-                        # Build a simple tonic chord: root + fifth (or just root for low grades)
-                        fifth_pc = (tonic_pc + 7) % 12
-                        fifth_pitches = [p for p in lh_pool if p % 12 == fifth_pc and p > bass_note and p - bass_note <= 12]
-                        if fifth_pitches and grade >= 3:
-                            final_pitches = sorted([bass_note, fifth_pitches[0]])
-                        else:
-                            final_pitches = [bass_note]
-                        lh_events = [{
-                            "hand": "lh",
-                            "offset": 0.0,
-                            "quarterLength": total,
-                            "isRest": False,
-                            "pitches": final_pitches,
-                            "technique": "final chord",
-                            "fermata": True,
-                        }]
-                    else:
-                        lh_events = _build_left_pattern(
-                            "held", lh_pool, lh_harmony,
-                            total, pulse, request, rng,
-                            bass_target=int(bass_target_pitch) if bass_target_pitch is not None else None,
-                            measure_role=measure_role,
-                            is_phrase_start=is_phrase_start,
-                            is_cadence=is_cadence,
-                            prev_bass_pitch=lh_pitch,
-                        )
+                    lh_events = _apply_lh_piece_ending(
+                        lh_pool,
+                        request["keySignature"],
+                        lh_pitch,
+                        total,
+                        str(request.get("timeSignature", "4/4")),
+                        grade,
+                        rng,
+                    )
                 else:
                     lh_events = _build_left_pattern(
                         measure_lh_family, lh_pool, lh_harmony,
@@ -415,6 +414,15 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
                         lh_pitch = int(last_bass)
     events = _apply_right_hand_seconds(events, request, preset, rng)
     events = _apply_right_hand_harmonic_punctuations(events, request, preset, rng)
+
+    # Break up runs of identical LH rhythmic shapes so the accompaniment
+    # doesn't lock into the same pattern for the whole piece.
+    events = _apply_lh_variation_pass(
+        events,
+        total,
+        int(request["measureCount"]),
+        rng,
+    )
 
     # Post-processing: ties, dynamics, slurs, articulations, playback touch
     events = _apply_ties(events, request, rng)
