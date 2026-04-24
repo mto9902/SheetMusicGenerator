@@ -12,11 +12,12 @@ from ._chord import (
     _chord_tones_in_pool,
     _weights_for_hand,
     _lh_bass_pitch,
+    _rh_lead_pitch,
     _preferred_left_families,
     _apply_right_hand_seconds,
     _apply_right_hand_harmonic_punctuations,
 )
-from ._rhythm import _pick_rhythm_cells, _pick_texture, _pick_contour
+from ._rhythm import _pick_rhythm_cells, _pick_texture
 from ._texture import (
     _build_measure_content,
     _replay_rhythm_template,
@@ -33,6 +34,12 @@ from ._planning import (
     _pick_phrase_plan,
     _resolve_top_line_target,
     _resolve_bass_line_target,
+)
+from ._variation import (
+    _pick_profile_archetype,
+    _pick_profile_contour,
+    _pick_variation_profile,
+    _variation_profile_debug,
 )
 from ._left_hand import _build_left_pattern
 from ._expression import (
@@ -58,6 +65,55 @@ def _measure_events_with_offsets(measure_number: int, measure_offset: float, han
             "offset": round(measure_offset + float(event["offset"]), 3),
         })
     return output
+
+
+def _repair_right_hand_leaps(
+    events: list[dict[str, Any]],
+    rh_pool: list[int],
+    max_leap: int,
+) -> list[dict[str, Any]]:
+    repaired_events: list[dict[str, Any]] = []
+    previous_pitch: int | None = None
+    allowed_pool = sorted({int(pitch_value) for pitch_value in rh_pool})
+
+    for event in events:
+        if event.get("hand") != "rh" or event.get("isRest") or not event.get("pitches"):
+            repaired_events.append(event)
+            continue
+
+        lead_pitch = _rh_lead_pitch(event)
+        if lead_pitch is None:
+            repaired_events.append(event)
+            continue
+
+        updated_event = event
+        if previous_pitch is not None and abs(int(lead_pitch) - previous_pitch) > max_leap:
+            candidates = [
+                pitch_value
+                for pitch_value in allowed_pool
+                if abs(pitch_value - previous_pitch) <= max_leap
+            ]
+            if candidates:
+                repaired_pitch = min(
+                    candidates,
+                    key=lambda pitch_value: (
+                        abs(pitch_value - int(lead_pitch)),
+                        abs(pitch_value - previous_pitch),
+                    ),
+                )
+                delta = repaired_pitch - int(lead_pitch)
+                shifted_pitches = [int(pitch_value) + delta for pitch_value in event.get("pitches", [])]
+                if shifted_pitches and all(pitch_value in allowed_pool for pitch_value in shifted_pitches):
+                    updated_pitches = shifted_pitches
+                else:
+                    updated_pitches = [repaired_pitch]
+                updated_event = {**event, "pitches": updated_pitches}
+                lead_pitch = repaired_pitch
+
+        previous_pitch = int(lead_pitch)
+        repaired_events.append(updated_event)
+
+    return repaired_events
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +192,12 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
     lh_weights = _weights_for_hand("lh", preset, request)
 
     # State tracking for both hands
-    rh_pitch = rng.choice(rh_pool)
+    if grade == 1 and grade_stage == "g1-staff":
+        rh_pitch = rng.choice(rh_pool[max(0, len(rh_pool) - 5):])
+    elif grade == 1 and grade_stage == "g1-extend" and rng.random() < 0.55:
+        rh_pitch = rng.choice(rh_pool[max(0, len(rh_pool) - 4):])
+    else:
+        rh_pitch = rng.choice(rh_pool)
     lh_pitch = lh_pool[0]
     rh_recent: list[int] = []
     lh_recent: list[int] = []
@@ -147,12 +208,17 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
     piece_plan = _build_piece_plan(phrases, request, style_profile, rng,
                                    phrase_grammars=early_grammars)
     phrase_plans: list[dict[str, Any]] = []
+    variation_profile = _pick_variation_profile(request, rng)
 
-    # Phase 1: lock rhythm cells for the entire piece
-    piece_rhythm_cells: dict[str, list[list[float]]] = {
-        "rh": _pick_rhythm_cells(grade, rh_allowed, rng),
-        "lh": _pick_rhythm_cells(grade, lh_allowed, rng),
-    }
+    # Variation profiles decide whether rhythm is a piece identity or a
+    # phrase-local contrast. Piece locking remains available, but it is no
+    # longer the only default shape.
+    piece_rhythm_cells: dict[str, list[list[float]]] | None = None
+    if variation_profile.rhythm_scope == "piece":
+        piece_rhythm_cells = {
+            "rh": _pick_rhythm_cells(grade, rh_allowed, rng),
+            "lh": _pick_rhythm_cells(grade, lh_allowed, rng),
+        }
 
     # Phase 2: lock LH pattern family for the piece.
     # Weight selection toward calmer patterns — SRF-style LH is mostly half/quarter
@@ -165,12 +231,25 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
         "arpeggio-support": 0.4, "simple-broken": 0.3, "alberti": 0.3,
     }
     preferred_lh = set(_preferred_left_families(request, available_lh))
+    requested_pattern = str(request.get("leftHandPattern", "held"))
+    profile_broadens_default_lh = (
+        requested_pattern == "held"
+        and grade >= 2
+        and variation_profile.name in {
+            "left-hand-feature",
+            "hands-alternating",
+            "rhythmic-study",
+            "texture-contrast",
+            "broken-chord-reading",
+        }
+    )
     # Honor the user's leftHandPattern selection: if preferred families
     # intersect with what this grade allows, restrict available_lh to those
     # preferred families so the user-facing choice actually changes output.
     if (
         preferred_lh
         and set(available_lh) & preferred_lh
+        and not profile_broadens_default_lh
         and not (
             grade == 1
             and str(request.get("mode", "piano")) == "piano"
@@ -181,13 +260,16 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
     coordination_style = str(request.get("coordinationStyle", "support"))
     hand_activity = str(request.get("handActivity", "both"))
     reading_focus = str(request.get("readingFocus", "balanced"))
-    requested_pattern = str(request.get("leftHandPattern", "held"))
 
     lh_weights: list[float] = []
     for family in available_lh:
         weight = _LH_FAMILY_WEIGHT.get(family, 0.5)
+        weight *= float(variation_profile.lh_family_bias.get(family, 1.0))
         if family in preferred_lh:
-            preferred_boost = 1.35 if grade == 1 and grade_stage is not None else 2.35
+            if profile_broadens_default_lh:
+                preferred_boost = 1.1
+            else:
+                preferred_boost = 1.35 if grade == 1 and grade_stage is not None else 2.35
             weight *= preferred_boost
         if grade == 1 and grade_stage in {"g1-extend", "g1-staff"}:
             if family == "held":
@@ -214,13 +296,9 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
         lh_weights.append(max(weight, 0.05))
     piece_lh_family = rng.choices(available_lh, weights=lh_weights, k=1)[0]
 
-    # Phase 6: lock archetype and contour at piece level to reduce entropy.
-    piece_archetype = rng.choices(
-        ["period", "sentence", "lyric", "sequence"],
-        weights=[1.4, 1.1, 0.95, 0.9],
-        k=1,
-    )[0]
-    piece_contour = _pick_contour(rng)
+    # Phase 6: choose archetype/contour through the variation profile.
+    piece_archetype = _pick_profile_archetype(variation_profile, rng)
+    piece_contour = _pick_profile_contour(variation_profile, rng)
 
     # Phase 3: store phrase A's rhythm templates for A' replay
     phrase_a_rhythm_templates: dict[int, list[dict[str, Any]]] = {}  # mi_in_phrase -> template
@@ -246,6 +324,7 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
             piece_archetype=piece_archetype,
             piece_contour=piece_contour,
             phrase_grammar=pg,
+            variation_profile=variation_profile,
         )
         phrase_plans.append(phrase_plan)
         left_family_by_measure = dict(phrase_plan.get("_leftFamilyByMeasure") or {})
@@ -253,11 +332,16 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
 
         # Phase 3: determine if this phrase should replay phrase A's rhythm.
         # Phrase 1 (A') replays A when the piece has 2+ phrases and phrase lengths match.
+        replay_a_prime = variation_profile.replay_a_prime
         is_a_prime = (
             phrase_index == 1
             and len(phrases) >= 2
             and phrase_a_rhythm_templates
             and len(phrase_measures) == len(phrases[0])
+            and (
+                replay_a_prime == "strict"
+                or (replay_a_prime == "loose" and rng.random() < 0.42)
+            )
         )
 
         for mi, measure_number in enumerate(phrase_measures):
@@ -304,6 +388,10 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
                 request["keySignature"],
                 harmony,
                 rh_pitch,
+                # The first sounding note has no prior musical context, so let
+                # Grade 1 staff stages open from varied register slots. After
+                # that, keep the hard beginner leap cap intact.
+                max_leap=None if measure_number == 1 else max_leap,
             )
             bass_target_pitch = _resolve_bass_line_target(
                 phrase_plan.get("_bassLinePlan"),
@@ -445,6 +533,7 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
                         lh_pitch = int(last_bass)
     events = _apply_right_hand_seconds(events, request, preset, rng)
     events = _apply_right_hand_harmonic_punctuations(events, request, preset, rng)
+    events = _repair_right_hand_leaps(events, rh_pool, max_leap)
 
     # Break up runs of identical LH rhythmic shapes so the accompaniment
     # doesn't lock into the same pattern for the whole piece.
@@ -470,6 +559,7 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
         "harmonicPlan": plan,
         "styleProfile": style_profile,
         "piecePlan": piece_plan,
+        "variationProfile": _variation_profile_debug(variation_profile),
     }
 
 

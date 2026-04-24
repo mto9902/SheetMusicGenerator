@@ -2191,6 +2191,7 @@ def _debug_plan_summary(candidate: dict[str, Any], request: dict[str, Any]) -> d
                 "archetype": phrase_plan.get("archetype"),
                 "cadenceTarget": phrase_plan.get("cadenceTarget"),
                 "answerForm": phrase_plan.get("_answerForm"),
+                "variationProfile": phrase_plan.get("_variationProfile"),
                 "accompanimentRole": phrase_plan.get("accompanimentRole"),
                 "leftFamily": phrase_plan.get("leftFamily"),
                 "leftFamilyByMeasure": phrase_plan.get("_leftFamilyByMeasure"),
@@ -2205,6 +2206,7 @@ def _debug_plan_summary(candidate: dict[str, Any], request: dict[str, Any]) -> d
         )
     return {
         "requestFocus": request.get("readingFocus"),
+        "variationProfile": candidate.get("variationProfile"),
         "styleProfile": asdict(style_profile) if isinstance(style_profile, StyleProfile) else None,
         "piecePlan": asdict(piece_plan) if isinstance(piece_plan, PiecePlan) else None,
         "phrases": phrase_summaries,

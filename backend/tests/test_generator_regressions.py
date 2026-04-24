@@ -16,6 +16,7 @@ from backend.app.generator._scoring import (
     _quality_gate_result,
     _validate_events,
 )
+from backend.app.generator._variation import _pick_variation_profile
 
 
 BASE_REQUEST: dict[str, Any] = {
@@ -99,6 +100,28 @@ def _max_primary_leap(events: list[dict[str, Any]], hand: str) -> int:
     if len(pitches) < 2:
         return 0
     return max(abs(right - left) for left, right in zip(pitches, pitches[1:], strict=False))
+
+
+def _rhythm_signature(events: list[dict[str, Any]], hand: str) -> tuple[tuple[float, ...], ...]:
+    by_measure: dict[int, list[float]] = {}
+    for event in events:
+        if event["hand"] != hand or event["isRest"]:
+            continue
+        by_measure.setdefault(int(event["measure"]), []).append(round(float(event["quarterLength"]), 3))
+    return tuple(tuple(values) for _, values in sorted(by_measure.items()))
+
+
+def _contour_signature(candidate: dict[str, Any]) -> tuple[str, ...]:
+    return tuple(str(phrase_plan.get("_contour", "flat")) for phrase_plan in candidate.get("phrasePlans", []))
+
+
+def _left_family_signature(candidate: dict[str, Any]) -> tuple[str, ...]:
+    families: list[str] = []
+    for phrase_plan in candidate.get("phrasePlans", []):
+        family_by_measure = dict(phrase_plan.get("_leftFamilyByMeasure") or {})
+        for measure_number in sorted(family_by_measure):
+            families.append(str(family_by_measure[measure_number]))
+    return tuple(families)
 
 
 def _has_extension_by_measure(
@@ -460,3 +483,72 @@ class GeneratorRegressionTests(unittest.TestCase):
             5,
             msg=f"LH rhythm signature repeated {longest_run} bars without variation: {signatures}",
         )
+
+    def test_variation_profile_picker_covers_each_grade_band(self) -> None:
+        expected_minimums = {1: 4, 2: 5, 3: 6, 4: 7, 5: 7}
+        for grade, expected_minimum in expected_minimums.items():
+            with self.subTest(grade=grade):
+                names: Counter[str] = Counter()
+                for idx in range(90):
+                    request = {
+                        **BASE_REQUEST,
+                        "grade": grade,
+                        "keySignature": "C",
+                        "gradeStage": "g1-staff" if grade == 1 else None,
+                        "seed": f"profile{grade}-{idx}",
+                    }
+                    profile = _pick_variation_profile(request, random.Random(request["seed"]))
+                    names[profile.name] += 1
+
+                self.assertGreaterEqual(
+                    len(names),
+                    expected_minimum,
+                    msg=f"Grade {grade} variation profile coverage collapsed: {names}",
+                )
+
+    def test_selected_candidates_keep_distinct_vibe_signatures(self) -> None:
+        for grade in (1, 3, 5):
+            with self.subTest(grade=grade):
+                profile_names: Counter[str] = Counter()
+                rhythm_signatures: Counter[tuple] = Counter()
+                vibe_signatures: Counter[tuple] = Counter()
+                sample_count = 18
+                for idx in range(sample_count):
+                    request = {
+                        **BASE_REQUEST,
+                        "grade": grade,
+                        "gradeStage": "g1-staff" if grade == 1 else None,
+                        "keySignature": "C",
+                        "measureCount": 8,
+                        "seed": f"vibe{grade}-{idx}",
+                    }
+                    candidate = _select_candidate(request)
+                    self.assertIsNotNone(candidate, msg=f"Generation failed for seed {request['seed']}")
+                    candidate = candidate or {}
+                    events = candidate["events"]
+                    profile_name = str(candidate.get("variationProfile", {}).get("name", "unknown"))
+                    profile_names[profile_name] += 1
+                    rh_rhythm = _rhythm_signature(events, "rh")
+                    rhythm_signatures[rh_rhythm] += 1
+                    vibe_signatures[(
+                        profile_name,
+                        rh_rhythm,
+                        _contour_signature(candidate),
+                        _left_family_signature(candidate),
+                    )] += 1
+
+                self.assertGreaterEqual(
+                    len(profile_names),
+                    3,
+                    msg=f"Selected Grade {grade} candidates over-used one profile: {profile_names}",
+                )
+                self.assertGreaterEqual(
+                    len(rhythm_signatures),
+                    5,
+                    msg=f"Selected Grade {grade} RH rhythm shapes were too similar: {rhythm_signatures}",
+                )
+                self.assertGreaterEqual(
+                    len(vibe_signatures),
+                    9,
+                    msg=f"Selected Grade {grade} vibe signatures were too similar: {vibe_signatures}",
+                )

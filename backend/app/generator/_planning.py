@@ -23,6 +23,7 @@ from ._types import (
 from ._helpers import _measure_total, _fit_measure_variants, _signature_similarity
 from ._harmony import _phrase_form_template, _form_label
 from ._rhythm import _RHYTHM_CELLS_SIMPLE, _pick_rhythm_cells, _pick_contour, _related_contour, _CADENCE_LIBRARY
+from ._variation import VariationProfile, _phrase_contour_for_profile
 from ._texture import (
     _nearest_pool_index,
     _duration_signature,
@@ -1159,7 +1160,9 @@ def _build_top_line_plan(
             indices = [rotation, (rotation + 2) % 7, (rotation + 4) % 7, (rotation + 1) % 7]
         elif style_profile.grade_stage == "g1-staff":
             palette = [index / 8 for index in range(9)]
-            rotation = rng.choice([0, 2, 4, 6, 7, 8])
+            # Staff stage should often begin from the expanded reading area so
+            # beginners actually meet notes above the five-finger pocket.
+            rotation = rng.choice([4, 5, 6, 7, 8, 8])
             high_index = len(palette) - 1
             indices = [rotation, high_index, high_index - 1, (rotation + 2) % 9]
         else:
@@ -1361,6 +1364,7 @@ def _resolve_top_line_target(
     key_signature: str,
     harmony: str,
     reference_pitch: int,
+    max_leap: int | None = None,
 ) -> int | None:
     if plan is None or measure_number not in plan.pitch_roles:
         return None
@@ -1385,6 +1389,8 @@ def _resolve_top_line_target(
         pool_index = _nearest_pool_index(pool, pitch_value)
         interval = abs(pitch_value - reference_pitch)
         interval_penalty = interval * (0.018 if pitch_role == "opening" else 0.05)
+        if max_leap is not None and interval > max_leap:
+            interval_penalty += 12.0 + (interval - max_leap) * 2.0
         if motion_role in {"rise", "push"} and pitch_value <= reference_pitch:
             interval_penalty += 0.55
         elif motion_role == "release" and pitch_value >= reference_pitch:
@@ -1602,14 +1608,32 @@ def _choose_phrase_textures(
     request: dict[str, Any],
     preset: dict[str, Any],
     rng: random.Random,
+    variation_profile: VariationProfile | None = None,
 ) -> dict[int, str]:
     piano_rules = preset["piano"]
     base_weights = dict(piano_rules.get("textureWeights", {"melody": 1.0, "chordal": 0.0, "running": 0.0}))
     grade = int(request["grade"])
     focus = str(request.get("readingFocus", "balanced"))
+    if variation_profile is not None:
+        for texture, bias in variation_profile.texture_bias.items():
+            base_weights[texture] = max(0.0, float(base_weights.get(texture, 0.0))) * float(bias)
 
     if grade < 4:
-        return {measure_number: "melody" for measure_number in phrase_measures}
+        texture_by_measure = {measure_number: "melody" for measure_number in phrase_measures}
+        if (
+            grade == 3
+            and variation_profile is not None
+            and float(variation_profile.texture_bias.get("chordal", 1.0)) > 1.0
+            and len(phrase_measures) >= 3
+        ):
+            contrast_candidates = [
+                measure_number
+                for measure_number in phrase_measures[1:-1]
+                if role_by_measure.get(measure_number) in {"answer", "develop", "intensify"}
+            ]
+            if contrast_candidates and rng.random() < 0.55:
+                texture_by_measure[rng.choice(contrast_candidates)] = "chordal"
+        return texture_by_measure
 
     primary_weights = {
         "melody": max(0.01, float(base_weights.get("melody", 1.0))) * (
@@ -1773,6 +1797,7 @@ def _pick_phrase_plan(
     piece_archetype: str | None = None,
     piece_contour: str | None = None,
     phrase_grammar: PhraseGrammar | None = None,
+    variation_profile: VariationProfile | None = None,
 ) -> dict[str, Any]:
     piano_rules = preset["piano"]
     accidental_roles = list(piano_rules.get("accidentalRoles", []))
@@ -1797,7 +1822,16 @@ def _pick_phrase_plan(
         "ascending": "descending", "descending": "ascending",
         "arch": "valley", "valley": "arch", "flat": "flat",
     }
-    if piece_contour is not None:
+    if variation_profile is not None:
+        source_contour = str(previous_phrase_plan.get("_contour", "flat")) if previous_phrase_plan else None
+        contour, inherit_contour = _phrase_contour_for_profile(
+            variation_profile,
+            phrase_index,
+            piece_contour,
+            source_contour,
+            rng,
+        )
+    elif piece_contour is not None:
         if phrase_index == 0:
             contour = piece_contour
         elif phrase_index == 1:
@@ -1866,6 +1900,7 @@ def _pick_phrase_plan(
         request,
         preset,
         rng,
+        variation_profile=variation_profile,
     )
     if phrase_index == 0 and phrase_measures:
         for measure_number in phrase_measures[:2]:
@@ -1946,11 +1981,24 @@ def _pick_phrase_plan(
     # Anchor and answer cells are drawn from the piece-level pool (locked across phrases).
     # When piece_rhythm_cells is active, every phrase shares the same palette so
     # inherit_rhythm is always True by construction.
-    inherit_rhythm = piece_rhythm_cells is not None or bool(
-        previous_phrase_plan
-        and (previous_phrase_plan.get("_anchorCell") or previous_phrase_plan.get("_answerCell"))
-        and rng.random() < 0.82
-    )
+    if variation_profile is not None and variation_profile.rhythm_scope == "loose":
+        inherit_rhythm = bool(
+            previous_phrase_plan
+            and (previous_phrase_plan.get("_anchorCell") or previous_phrase_plan.get("_answerCell"))
+            and rng.random() < 0.22
+        )
+    elif variation_profile is not None and variation_profile.rhythm_scope == "phrase":
+        inherit_rhythm = bool(
+            previous_phrase_plan
+            and (previous_phrase_plan.get("_anchorCell") or previous_phrase_plan.get("_answerCell"))
+            and rng.random() < 0.45
+        )
+    else:
+        inherit_rhythm = piece_rhythm_cells is not None or bool(
+            previous_phrase_plan
+            and (previous_phrase_plan.get("_anchorCell") or previous_phrase_plan.get("_answerCell"))
+            and rng.random() < 0.82
+        )
     if piece_rhythm_cells is not None:
         # Deterministic: first cell is the anchor, second is the answer — locked for the piece.
         anchor_cell = list(rh_cells[0] if rh_cells else [1.0])
@@ -2050,7 +2098,19 @@ def _pick_phrase_plan(
         rng,
     )
     melody_measures = [measure_number for measure_number in phrase_measures if texture_by_measure.get(measure_number) == "melody"]
-    if phrase_index == 0:
+    motif_density = variation_profile.motif_density if variation_profile is not None else "standard"
+    if motif_density == "cadence":
+        force_motif_measures = tuple(melody_measures[-1:])
+        if phrase_index == 0 and melody_measures:
+            force_motif_measures = tuple(dict.fromkeys([melody_measures[0], *force_motif_measures]))
+    elif motif_density == "light":
+        if phrase_index == 0:
+            force_motif_measures = tuple(dict.fromkeys([*melody_measures[:1], *melody_measures[-1:]]))
+        elif previous_phrase_plan:
+            force_motif_measures = tuple(dict.fromkeys([*melody_measures[:1], *melody_measures[-1:]]))
+        else:
+            force_motif_measures = tuple(melody_measures[:1])
+    elif phrase_index == 0:
         force_motif_measures = tuple(melody_measures)
     elif previous_phrase_plan:
         force_motif_measures = tuple(dict.fromkeys([*melody_measures[:2], *melody_measures[-1:]]))
@@ -2133,4 +2193,5 @@ def _pick_phrase_plan(
         "_phraseBlueprint": phrase_blueprint,
         "_answerForm": answer_form,
         "_phraseGrammar": phrase_grammar,
+        "_variationProfile": variation_profile.name if variation_profile is not None else None,
     }
