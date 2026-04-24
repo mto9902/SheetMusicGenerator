@@ -1159,8 +1159,9 @@ def _build_top_line_plan(
             indices = [rotation, (rotation + 2) % 7, (rotation + 4) % 7, (rotation + 1) % 7]
         elif style_profile.grade_stage == "g1-staff":
             palette = [index / 8 for index in range(9)]
-            rotation = rng.randrange(len(palette))
-            indices = [rotation, (rotation + 3) % 9, (rotation + 6) % 9, (rotation + 2) % 9]
+            rotation = rng.choice([0, 2, 4, 6, 7, 8])
+            high_index = len(palette) - 1
+            indices = [rotation, high_index, high_index - 1, (rotation + 2) % 9]
         else:
             palette = []
             indices = []

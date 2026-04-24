@@ -158,6 +158,8 @@ def _analyze_stage_batch(
     lh_union: set[int] = set()
     rh_upper_count = 0
     lh_lower_count = 0
+    rh_above_c5_count = 0
+    lh_below_c3_count = 0
     outside_window_count = 0
     outside_pocket_count = 0
     early_extension_count = 0
@@ -192,6 +194,10 @@ def _analyze_stage_batch(
             rh_upper_count += 1
         if any(pitch_value in lh_lower for pitch_value in lh_note_pitches):
             lh_lower_count += 1
+        if any(pitch_value > 72 for pitch_value in rh_note_pitches):
+            rh_above_c5_count += 1
+        if any(pitch_value < 48 for pitch_value in lh_note_pitches):
+            lh_below_c3_count += 1
 
         if _has_extension_by_measure(events, "rh", list(rh_upper), 2) or _has_extension_by_measure(
             events,
@@ -226,6 +232,8 @@ def _analyze_stage_batch(
         "lh_union_count": len(lh_union),
         "rh_upper_count": rh_upper_count,
         "lh_lower_count": lh_lower_count,
+        "rh_above_c5_count": rh_above_c5_count,
+        "lh_below_c3_count": lh_below_c3_count,
         "outside_window_count": outside_window_count,
         "outside_pocket_count": outside_pocket_count,
         "early_extension_count": early_extension_count,
@@ -235,6 +243,48 @@ def _analyze_stage_batch(
 
 
 class GeneratorRegressionTests(unittest.TestCase):
+    def test_grade1_stage_pockets_cover_named_five_finger_positions(self) -> None:
+        for hand_position in ("C", "G", "D", "F", "Bb"):
+            with self.subTest(hand_position=hand_position):
+                rh_zones = _position_stage_zones(
+                    HAND_POSITION_ROOTS["rh"][hand_position],
+                    "C",
+                    hand="rh",
+                    grade=1,
+                    grade_stage="g1-pocket",
+                )
+                lh_zones = _position_stage_zones(
+                    HAND_POSITION_ROOTS["lh"][hand_position],
+                    "C",
+                    hand="lh",
+                    grade=1,
+                    grade_stage="g1-pocket",
+                )
+                self.assertGreaterEqual(
+                    len(rh_zones["pocket"]),
+                    5,
+                    msg=f"RH pocket was truncated in {hand_position} position: {rh_zones}",
+                )
+                self.assertGreaterEqual(
+                    len(lh_zones["pocket"]),
+                    5,
+                    msg=f"LH pocket was truncated in {hand_position} position: {lh_zones}",
+                )
+        self.assertIn(74, _position_stage_zones(
+            HAND_POSITION_ROOTS["rh"]["G"],
+            "C",
+            hand="rh",
+            grade=1,
+            grade_stage="g1-pocket",
+        )["pocket"])
+        self.assertIn(57, _position_stage_zones(
+            HAND_POSITION_ROOTS["lh"]["D"],
+            "C",
+            hand="lh",
+            grade=1,
+            grade_stage="g1-pocket",
+        )["pocket"])
+
     def test_grade1_stage_pocket_batch_rules(self) -> None:
         for key_signature in ("C", "F", "G"):
             with self.subTest(key_signature=key_signature):
@@ -320,6 +370,16 @@ class GeneratorRegressionTests(unittest.TestCase):
                     summary["opening_outside_count"],
                     12,
                     msg=f"Staff stage did not open outside the pocket often enough: {summary}",
+                )
+                self.assertGreaterEqual(
+                    summary["rh_above_c5_count"],
+                    12,
+                    msg=f"Staff stage did not practice RH notes above treble C often enough: {summary}",
+                )
+                self.assertGreaterEqual(
+                    summary["lh_below_c3_count"],
+                    28,
+                    msg=f"Staff stage did not practice LH notes below middle-bass C often enough: {summary}",
                 )
                 self.assertLessEqual(
                     summary["max_rh_leap"],

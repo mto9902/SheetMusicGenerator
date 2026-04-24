@@ -110,7 +110,7 @@ HAND_POSITION_LIMITS = {
 
 # Grade-aware range expansion: higher grades get wider range (ledger lines)
 HAND_POSITION_LIMITS_BY_GRADE = {
-    1: {"rh": (57, 72), "lh": (40, 55)},
+    1: {"rh": (57, 77), "lh": (36, 57)},
     2: {"rh": (57, 72), "lh": (40, 55)},
     3: {"rh": (55, 76), "lh": (38, 55)},
     4: {"rh": (52, 81), "lh": (36, 57)},
