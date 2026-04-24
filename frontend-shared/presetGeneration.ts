@@ -180,9 +180,9 @@ function presetCoordinationWeights(
 ): WeightedChoice<ExerciseConfig["coordinationStyle"]>[] {
   if (grade <= 1) {
     return [
-      { value: "support", weight: 7 },
-      { value: "together", weight: 2 },
-      { value: "alternating", weight: 1 },
+      { value: "support", weight: 5 },
+      { value: "together", weight: 3 },
+      { value: "alternating", weight: 2 },
     ];
   }
   if (grade === 2) {
@@ -256,9 +256,9 @@ function presetRightHandMotionWeights(
 ): WeightedChoice<ExerciseConfig["rightHandMotion"]>[] {
   if (grade <= 1) {
     return [
-      { value: "stepwise", weight: 8 },
+      { value: "stepwise", weight: 5 },
       { value: "small-leaps", weight: 2 },
-      { value: "mixed", weight: 1 },
+      { value: "mixed", weight: 4 },
     ];
   }
   if (grade === 2) {
@@ -311,10 +311,28 @@ function presetLeftPatternWeights(
     familyCounts.set(pattern, (familyCounts.get(pattern) ?? 0) + 1);
   }
 
-  return Array.from(familyCounts.entries()).map(([value, weight]) => ({
-    value,
-    weight,
-  }));
+  return Array.from(familyCounts.entries())
+    .map(([value, weight]) => {
+      let adjustedWeight = weight;
+      if (grade <= 1) {
+        if (value === "repeated") {
+          adjustedWeight += 2;
+        } else if (value === "held") {
+          adjustedWeight = Math.max(1, adjustedWeight - 0.5);
+        }
+      } else if (grade === 2) {
+        if (value === "repeated") {
+          adjustedWeight += 1;
+        } else if (value === "simple-broken") {
+          adjustedWeight += 1;
+        }
+      }
+      return {
+        value,
+        weight: adjustedWeight,
+      };
+    })
+    .filter((option) => option.weight > 0);
 }
 
 export function resolvePresetConfigForRun(

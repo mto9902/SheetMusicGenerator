@@ -130,6 +130,23 @@ def _analyze_batch(key_signature: str, seed_prefix: str, sample_count: int) -> d
     }
 
 
+def _actual_peak_measure(events: list[dict[str, Any]]) -> int | None:
+    measure_peaks: dict[int, int] = {}
+    for event in events:
+        if event["hand"] != "rh" or event["isRest"] or not event.get("pitches"):
+            continue
+        measure_number = int(event["measure"])
+        peak_pitch = max(int(pitch_value) for pitch_value in event["pitches"])
+        measure_peaks[measure_number] = max(measure_peaks.get(measure_number, peak_pitch), peak_pitch)
+    if not measure_peaks:
+        return None
+    center_measure = sorted(measure_peaks)[len(measure_peaks) // 2]
+    return max(
+        measure_peaks.items(),
+        key=lambda item: (item[1], -abs(item[0] - center_measure)),
+    )[0]
+
+
 class GeneratorRegressionTests(unittest.TestCase):
     def test_grade1_c_major_openings_do_not_collapse_to_one_note(self) -> None:
         summary = _analyze_batch("C", "cgate", 40)
@@ -266,3 +283,45 @@ class GeneratorRegressionTests(unittest.TestCase):
             msg=f"F-major bass did not dip below C often enough: {summary}",
         )
 
+    def test_grade1_support_stepwise_prefers_later_peaks(self) -> None:
+        request_template = {
+            **BASE_REQUEST,
+            "keySignature": "C",
+            "coordinationStyle": "support",
+            "rightHandMotion": "stepwise",
+            "leftHandPattern": "repeated",
+            "allowRests": True,
+        }
+        sample_count = 30
+        late_peak_exercises = 0
+        high_peak_exercises = 0
+
+        for idx in range(sample_count):
+            request = {**request_template, "seed": f"peakgate{idx}"}
+            candidate = _select_candidate(request)
+            self.assertIsNotNone(candidate, msg=f"Generation failed for seed {request['seed']}")
+            events = candidate["events"]  # type: ignore[index]
+            peak_measure = _actual_peak_measure(events)
+            self.assertIsNotNone(peak_measure, msg=f"No RH peak found for {request['seed']}")
+            if peak_measure and peak_measure > 1:
+                late_peak_exercises += 1
+
+            rh_events = [
+                event
+                for event in events
+                if event["hand"] == "rh" and not event["isRest"] and event.get("pitches")
+            ]
+            peak_pitch = max(max(int(pitch_value) for pitch_value in event["pitches"]) for event in rh_events)
+            if peak_pitch >= 69:
+                high_peak_exercises += 1
+
+        self.assertGreaterEqual(
+            late_peak_exercises,
+            12,
+            msg=f"Stepwise support reps still peaked too early: {late_peak_exercises}/{sample_count}",
+        )
+        self.assertGreaterEqual(
+            high_peak_exercises,
+            12,
+            msg=f"Stepwise support reps stayed too central: {high_peak_exercises}/{sample_count}",
+        )

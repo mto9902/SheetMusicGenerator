@@ -129,6 +129,7 @@ def _realize_motive_fragment(
     max_leap: int,
     target_pitch: int | None = None,
     allowed_durations: list[float] | None = None,
+    rng: random.Random | None = None,
 ) -> tuple[list[dict[str, Any]], int, list[int], int, float, dict[str, Any] | None]:
     if transform in {"none", "contrast"}:
         return [], prev_pitch, recent, direction, 0.0, None
@@ -176,7 +177,19 @@ def _realize_motive_fragment(
         return [], prev_pitch, recent, direction, 0.0, None
 
     if harmony_tones:
-        anchor_pitch = min(harmony_tones, key=lambda candidate: abs(candidate - prev_pitch))
+        if target_pitch is not None and not recent:
+            target_index = _nearest_pool_index(pool, int(target_pitch))
+            opening_candidates = list(harmony_tones)
+            anchor_pitch = _choose_line_opening_pitch(
+                pool,
+                opening_candidates,
+                int(target_pitch),
+                prev_pitch,
+                target_index,
+                rng or random.Random(),
+            )
+        else:
+            anchor_pitch = min(harmony_tones, key=lambda candidate: abs(candidate - prev_pitch))
     else:
         anchor_pitch = prev_pitch
 
@@ -517,6 +530,46 @@ def _pitch_role_candidates(
     return list(pool)
 
 
+def _choose_line_opening_pitch(
+    pool: list[int],
+    candidates: list[int],
+    target_pitch: int,
+    prev_pitch: int,
+    target_index: int,
+    rng: random.Random,
+) -> int:
+    """Pick a piece-opening pitch near the planned register without locking to one note."""
+    unique_candidates = sorted(set(int(candidate) for candidate in candidates))
+    if not unique_candidates:
+        return int(target_pitch)
+    if len(unique_candidates) == 1:
+        return unique_candidates[0]
+
+    weights: list[float] = []
+    for candidate in unique_candidates:
+        candidate_index = _nearest_pool_index(pool, candidate)
+        register_distance = abs(candidate_index - target_index)
+        pitch_distance = abs(candidate - int(target_pitch))
+        prev_distance = abs(candidate - int(prev_pitch))
+
+        weight = 1.0
+        weight += max(0.0, 1.1 - (register_distance * 0.35))
+        if pitch_distance <= 2:
+            weight += 0.2
+        elif pitch_distance <= 4:
+            weight += 0.1
+        if 0 < pitch_distance <= 4:
+            weight += 0.18
+        if prev_distance == 0:
+            weight *= 0.82
+        elif prev_distance <= 3:
+            weight += 0.12
+
+        weights.append(max(0.2, weight))
+
+    return int(rng.choices(unique_candidates, weights=weights, k=1)[0])
+
+
 def _fit_desired_durations(
     total: float,
     allowed_durations: list[float],
@@ -830,7 +883,6 @@ def _realize_line_measure(
         return [], prev_pitch, recent, direction, 0.0, None
 
     pool_length = len(pool)
-    start_index = _nearest_pool_index(pool, prev_pitch)
     target_index = _relative_slot_to_index(anchor.register_slot, pool_length)
     if planned_top_pitch is not None:
         target_pitch = planned_top_pitch
@@ -841,6 +893,23 @@ def _realize_line_measure(
             key=lambda candidate: abs(_nearest_pool_index(pool, candidate) - target_index) + abs(candidate - prev_pitch) * 0.05,
         )
     target_index = _nearest_pool_index(pool, target_pitch)
+    start_pitch = prev_pitch
+    start_index = _nearest_pool_index(pool, start_pitch)
+    if current_measure == 1 and anchor.pitch_role == "opening":
+        opening_candidates = _pitch_role_candidates(pool, harmony_tones, key_signature, harmony, anchor.pitch_role)
+        start_pitch = _choose_line_opening_pitch(
+            pool,
+            opening_candidates,
+            int(target_pitch),
+            prev_pitch,
+            target_index,
+            rng,
+        )
+        start_index = _nearest_pool_index(pool, start_pitch)
+        prev_pitch = start_pitch
+        if target_pitch != start_pitch:
+            direction = 1 if int(target_pitch) > int(start_pitch) else -1
+
     durations = _durations_for_connection(
         connection.name,
         total,
@@ -1591,6 +1660,7 @@ def _build_melody_content(
             max_leap,
             target_pitch=int(planned_top_pitch) if planned_top_pitch is not None else None,
             allowed_durations=allowed_durations,
+            rng=rng,
         )
         if motif_events:
             for motif_event in motif_events:

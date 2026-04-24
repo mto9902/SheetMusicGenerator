@@ -1128,6 +1128,86 @@ def _top_line_strength_score(events: list[dict[str, Any]], phrase_plans: list[di
     return _mean(scores, default=0.72)
 
 
+def _beginner_variety_score(
+    request: dict[str, Any],
+    events: list[dict[str, Any]],
+    phrase_plans: list[dict[str, Any]],
+) -> float:
+    if int(request.get("grade", 1)) > 2:
+        return 0.75
+
+    phrase_scores: list[float] = []
+    for phrase_plan in phrase_plans:
+        measures = list(phrase_plan.get("measures", []))
+        if not measures:
+            continue
+
+        opening_pitch: int | None = None
+        measure_peaks: list[tuple[int, int]] = []
+        all_pitches: list[int] = []
+
+        for measure_number in measures:
+            measure_pitches = [
+                int(pitch_value)
+                for pitch_value in (
+                    _rh_lead_pitch(event)
+                    for event in _measure_events_for_hand(events, "rh", int(measure_number))
+                    if not event["isRest"] and event.get("pitches")
+                )
+                if pitch_value is not None
+            ]
+            if not measure_pitches:
+                continue
+            if opening_pitch is None:
+                opening_pitch = measure_pitches[0]
+            all_pitches.extend(measure_pitches)
+            measure_peaks.append((int(measure_number), max(measure_pitches)))
+
+        if opening_pitch is None or not all_pitches or not measure_peaks:
+            continue
+
+        center_measure = measures[min(len(measures) - 1, len(measures) // 2)]
+        peak_measure, peak_pitch = max(
+            measure_peaks,
+            key=lambda item: (item[1], -abs(item[0] - center_measure)),
+        )
+        register_span = peak_pitch - min(all_pitches)
+        opening_span = abs(peak_pitch - opening_pitch)
+
+        peak_position_score = 1.0 if peak_measure != measures[0] else 0.55
+        if len(measures) >= 4 and peak_measure == measures[1]:
+            peak_position_score = 0.9
+
+        peak_height_score = (
+            1.0
+            if peak_pitch >= 71
+            else 0.92
+            if peak_pitch >= 69
+            else 0.76
+            if peak_pitch >= 67
+            else 0.54
+        )
+        expansion_score = (
+            1.0
+            if opening_span >= 7
+            else 0.84
+            if opening_span >= 5
+            else 0.7
+            if opening_span >= 3
+            else 0.42
+        )
+        if register_span <= 4:
+            expansion_score *= 0.8
+
+        phrase_scores.append(
+            0.4 * peak_position_score
+            + 0.35 * peak_height_score
+            + 0.25 * expansion_score
+        )
+
+    return _mean(phrase_scores, default=0.72)
+
+
 def _bass_function_score(events: list[dict[str, Any]], phrase_plans: list[dict[str, Any]]) -> float:
     scores: list[float] = []
     for phrase_plan in phrase_plans:
@@ -1591,6 +1671,7 @@ def _evaluate_candidate(request: dict[str, Any], candidate: dict[str, Any]) -> E
     vertical_score = _vertical_balance_score(events)
     difficulty_score = _difficulty_smoothness_score(request, events, phrase_plans)
     chunkability_score = _sight_reading_chunkability_score(events, phrase_plans)
+    beginner_variety_score = _beginner_variety_score(request, events, phrase_plans)
     phrase_coherence = (
         continuation_score * 0.36
         + contour_score * 0.24
@@ -1611,6 +1692,7 @@ def _evaluate_candidate(request: dict[str, Any], candidate: dict[str, Any]) -> E
         (top_line_score, 1.65),
         (bass_score, 1.2),
         (visible_motion_score, 1.7),
+        (beginner_variety_score, 1.25 if int(request["grade"]) <= 2 else 0.0),
         (foreground_score, 1.45),
         (vertical_score, 1.25),
         (difficulty_score, 1.15),
@@ -1637,6 +1719,7 @@ def _evaluate_candidate(request: dict[str, Any], candidate: dict[str, Any]) -> E
         top_line_strength=top_line_score,
         bass_function=bass_score,
         visible_motion=visible_motion_score,
+        beginner_variety=beginner_variety_score,
         foreground_background_clarity=foreground_score,
         vertical_balance=vertical_score,
         total=total,
@@ -1717,8 +1800,9 @@ def _quality_gate_result(
             ("phrase coherence", evaluation.phrase_coherence, 0.50),
             ("cadence preparation", evaluation.cadence_preparation, 0.60),
             ("visible motion", evaluation.visible_motion, visible_motion_threshold),
+            ("beginner variety", evaluation.beginner_variety, 0.62),
         ]
-        hard_checks = {"cadence preparation", "visible motion"}
+        hard_checks = {"cadence preparation", "visible motion", "beginner variety"}
         leniency_max_reasons = 1
         leniency_gate = 0.95
         leniency_total = 0.62

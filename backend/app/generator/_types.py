@@ -134,6 +134,7 @@ class EvaluationBreakdown:
     top_line_strength: float = 0.0
     bass_function: float = 0.0
     visible_motion: float = 0.0
+    beginner_variety: float = 0.0
     foreground_background_clarity: float = 0.0
     vertical_balance: float = 0.0
     total: float = 0.0

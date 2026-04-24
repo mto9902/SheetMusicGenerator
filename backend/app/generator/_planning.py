@@ -1116,7 +1116,11 @@ def _build_top_line_plan(
     if contour == "ascending":
         peak_measure = phrase_measures[-1]
     elif contour == "descending":
-        peak_measure = phrase_measures[0]
+        peak_measure = (
+            phrase_measures[min(1, len(phrase_measures) - 1)]
+            if style_profile.grade <= 2 and len(phrase_measures) >= 3
+            else phrase_measures[0]
+        )
     elif piece_plan.apex_measure in phrase_measures:
         peak_measure = piece_plan.apex_measure
 
@@ -1136,13 +1140,15 @@ def _build_top_line_plan(
         if style_profile.grade <= 2 and measure_role == "establish" and index == 0:
             opening_energy = float(phrase_grammar.opening_energy) if phrase_grammar is not None else 0.5
             normalized_energy = max(0.0, min(1.0, (opening_energy - 0.35) / 0.30))
-            opening_floor = 0.42 if phrase_index == 0 else 0.38
-            opening_ceiling = 0.68 if phrase_index == 0 else 0.62
+            opening_floor = 0.44 if phrase_index == 0 else 0.4
+            opening_ceiling = 0.72 if phrase_index == 0 else 0.66
             opening_target = opening_floor + (opening_ceiling - opening_floor) * normalized_energy
             if contour == "ascending":
-                opening_target += 0.04
+                opening_target += 0.06
+            elif contour == "arch":
+                opening_target += 0.03
             elif contour == "descending":
-                opening_target -= 0.03
+                opening_target -= 0.01
             register_targets[measure_number] = max(
                 register_targets[measure_number],
                 max(style_profile.register_span[0], min(style_profile.register_span[1], opening_target)),
@@ -1150,7 +1156,7 @@ def _build_top_line_plan(
         elif style_profile.grade <= 2 and measure_number == peak_measure:
             register_targets[measure_number] = max(
                 register_targets[measure_number],
-                0.78 if phrase_index == 0 else 0.72,
+                0.82 if phrase_index == 0 else 0.76,
             )
         pitch_roles[measure_number] = _top_pitch_role_for_measure(
             measure_role,
@@ -1222,12 +1228,13 @@ def _resolve_top_line_target(
 ) -> int | None:
     if plan is None or measure_number not in plan.pitch_roles:
         return None
+    pitch_role = plan.pitch_roles.get(measure_number, "stable")
     candidates = _pitch_role_candidates(
         pool,
         harmony_tones,
         key_signature,
         harmony,
-        plan.pitch_roles[measure_number],
+        pitch_role,
     )
     desired_set = {int(pitch_value) for pitch_value in candidates}
     preferred = [
@@ -1241,7 +1248,7 @@ def _resolve_top_line_target(
     def _score(pitch_value: int) -> float:
         pool_index = _nearest_pool_index(pool, pitch_value)
         interval = abs(pitch_value - reference_pitch)
-        interval_penalty = interval * 0.05
+        interval_penalty = interval * (0.018 if pitch_role == "opening" else 0.05)
         if motion_role in {"rise", "push"} and pitch_value <= reference_pitch:
             interval_penalty += 0.55
         elif motion_role == "release" and pitch_value >= reference_pitch:
@@ -1250,9 +1257,9 @@ def _resolve_top_line_target(
             interval_penalty += interval * 0.02
         elif motion_role == "step" and pitch_value == reference_pitch:
             interval_penalty += 0.25
-        repeat_penalty = 0.7 if pitch_value == reference_pitch else 0.0
+        repeat_penalty = (0.18 if pitch_role == "opening" else 0.7) if pitch_value == reference_pitch else 0.0
         role_penalty = 0.0 if pitch_value in desired_set else (0.9 if motion_role == "cadence" else 0.38)
-        register_penalty = 0.0 if pitch_value in preferred_set else 0.22
+        register_penalty = 0.0 if pitch_value in preferred_set else (0.3 if pitch_role == "opening" else 0.22)
         return abs(pool_index - target_index) * 0.9 + interval_penalty + repeat_penalty + role_penalty + register_penalty
 
     return min(pool, key=_score)

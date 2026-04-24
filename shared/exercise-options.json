@@ -80,8 +80,8 @@
     "handActivity": "both",
     "coordinationStyle": "support",
     "readingFocus": "balanced",
-    "rightHandMotion": "stepwise",
-    "leftHandPattern": "held",
+    "rightHandMotion": "mixed",
+    "leftHandPattern": "repeated",
     "allowRests": true,
     "allowAccidentals": false
   }
