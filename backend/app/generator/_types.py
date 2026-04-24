@@ -8,6 +8,7 @@ from typing import Any
 @dataclass(frozen=True)
 class StyleProfile:
     grade: int
+    grade_stage: str | None
     focus: str
     cadence_strength: float
     left_hand_persistence: float
@@ -135,6 +136,7 @@ class EvaluationBreakdown:
     bass_function: float = 0.0
     visible_motion: float = 0.0
     beginner_variety: float = 0.0
+    stage_coverage: float = 0.0
     foreground_background_clarity: float = 0.0
     vertical_balance: float = 0.0
     total: float = 0.0

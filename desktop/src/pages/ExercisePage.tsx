@@ -9,7 +9,7 @@ import {
   formatHandPositionLabel,
   formatModeLabel,
 } from "@shared/format";
-import { nextSeed } from "@shared/options";
+import { formatGradeStageLabel as formatConfigStageLabel, nextSeed } from "@shared/options";
 import {
   normalizePresetShuffle,
   resolvePresetConfigForRun,
@@ -62,6 +62,7 @@ export function ExercisePage() {
   const pulseTimerRef = useRef<number | null>(null);
 
   const bpm = exercise?.summary.bpm ?? 92;
+  const stageLabel = exercise?.summary.stageLabel || formatConfigStageLabel(exercise?.config.gradeStage);
   const totalCountBeats = exercise ? countBeats(exercise.timeSignature) : 4;
   const pulseDots = useMemo(() => Array.from({ length: totalCountBeats }), [totalCountBeats]);
 
@@ -343,6 +344,7 @@ export function ExercisePage() {
           <h1 className="page__title">{exercise.title}</h1>
           <p className="page__subtitle">
             {formatModeLabel(exercise.config.mode)} | {exercise.timeSignature} | {exercise.measureCount} bars | Grade {exercise.grade}
+            {stageLabel ? ` | ${stageLabel}` : ""}
           </p>
         </div>
         <div className="page__actions">
@@ -390,7 +392,10 @@ export function ExercisePage() {
               </div>
             </div>
             <p className="detail-paragraph">
-              {exercise.summary.handPositionLabel} | {exercise.summary.coordinationLabel} |{" "}
+              {exercise.summary.handPositionLabel}
+              {stageLabel ? ` | ${stageLabel}` : ""}
+              {" | "}
+              {exercise.summary.coordinationLabel} |{" "}
               {exercise.summary.rhythmFocus.join(", ")}
             </p>
           </div>
@@ -464,6 +469,12 @@ export function ExercisePage() {
                 <span>Hand position</span>
                 <strong>{formatHandPositionLabel(exercise.config.handPosition)}</strong>
               </div>
+              {stageLabel ? (
+                <div className="summary-row">
+                  <span>Grade stage</span>
+                  <strong>{stageLabel}</strong>
+                </div>
+              ) : null}
               <div className="summary-row">
                 <span>Seed</span>
                 <strong>{exercise.summary.seedLabel}</strong>

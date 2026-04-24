@@ -5,8 +5,11 @@ import unittest
 from collections import Counter
 from typing import Any
 
+from backend.app.config import HAND_POSITION_ROOTS
 from backend.app.generator._builder import _build_piano_candidate
+from backend.app.generator._chord import _lh_bass_pitch, _rh_lead_pitch
 from backend.app.generator._helpers import _preset_for_grade
+from backend.app.generator._pitch import _position_stage_zones
 from backend.app.generator._planning import _build_style_profile
 from backend.app.generator._scoring import (
     _evaluate_candidate,
@@ -66,12 +69,100 @@ def _select_candidate(request: dict[str, Any]) -> dict[str, Any] | None:
     return best_passing_candidate or best_candidate
 
 
-def _analyze_batch(key_signature: str, seed_prefix: str, sample_count: int) -> dict[str, Any]:
-    request_template = {**BASE_REQUEST, "keySignature": key_signature}
+def _note_pitches(events: list[dict[str, Any]], hand: str) -> list[int]:
+    pitches: list[int] = []
+    for event in events:
+        if event["hand"] != hand or event["isRest"]:
+            continue
+        pitches.extend(int(pitch_value) for pitch_value in event.get("pitches", []))
+    return pitches
+
+
+def _primary_pitches(events: list[dict[str, Any]], hand: str) -> list[int]:
+    pitches: list[int] = []
+    for event in events:
+        if event["hand"] != hand or event["isRest"] or not event.get("pitches"):
+            continue
+        pitch_value = _rh_lead_pitch(event) if hand == "rh" else _lh_bass_pitch(event)
+        if pitch_value is not None:
+            pitches.append(int(pitch_value))
+    return pitches
+
+
+def _first_primary_pitch(events: list[dict[str, Any]], hand: str) -> int | None:
+    pitches = _primary_pitches(events, hand)
+    return pitches[0] if pitches else None
+
+
+def _max_primary_leap(events: list[dict[str, Any]], hand: str) -> int:
+    pitches = _primary_pitches(events, hand)
+    if len(pitches) < 2:
+        return 0
+    return max(abs(right - left) for left, right in zip(pitches, pitches[1:], strict=False))
+
+
+def _has_extension_by_measure(
+    events: list[dict[str, Any]],
+    hand: str,
+    extension_pitches: list[int],
+    max_measure: int,
+) -> bool:
+    extension_set = set(int(pitch_value) for pitch_value in extension_pitches)
+    if not extension_set:
+        return False
+    for event in events:
+        if event["hand"] != hand or event["isRest"] or int(event["measure"]) > max_measure:
+            continue
+        if any(int(pitch_value) in extension_set for pitch_value in event.get("pitches", [])):
+            return True
+    return False
+
+
+def _analyze_stage_batch(
+    key_signature: str,
+    grade_stage: str,
+    seed_prefix: str,
+    sample_count: int = 40,
+) -> dict[str, Any]:
+    request_template = {
+        **BASE_REQUEST,
+        "keySignature": key_signature,
+        "gradeStage": grade_stage,
+    }
+    zones = {
+        "rh": _position_stage_zones(
+            HAND_POSITION_ROOTS["rh"][request_template["handPosition"]],
+            key_signature,
+            hand="rh",
+            grade=1,
+            grade_stage=grade_stage,
+        ),
+        "lh": _position_stage_zones(
+            HAND_POSITION_ROOTS["lh"][request_template["handPosition"]],
+            key_signature,
+            hand="lh",
+            grade=1,
+            grade_stage=grade_stage,
+        ),
+    }
+
+    rh_window = set(int(pitch_value) for pitch_value in zones["rh"]["window"])
+    lh_window = set(int(pitch_value) for pitch_value in zones["lh"]["window"])
+    rh_pocket = set(int(pitch_value) for pitch_value in zones["rh"]["pocket"])
+    lh_pocket = set(int(pitch_value) for pitch_value in zones["lh"]["pocket"])
+    rh_upper = set(int(pitch_value) for pitch_value in zones["rh"]["upper_extension"])
+    lh_lower = set(int(pitch_value) for pitch_value in zones["lh"]["lower_extension"])
+
     opening_pitch_counter: Counter[int] = Counter()
-    high_treble_exercises = 0
-    high_opening_exercises = 0
-    low_bass_exercises = 0
+    rh_union: set[int] = set()
+    lh_union: set[int] = set()
+    rh_upper_count = 0
+    lh_lower_count = 0
+    outside_window_count = 0
+    outside_pocket_count = 0
+    early_extension_count = 0
+    opening_outside_count = 0
+    max_rh_leap = 0
     failures: list[str] = []
 
     for idx in range(sample_count):
@@ -82,110 +173,165 @@ def _analyze_batch(key_signature: str, seed_prefix: str, sample_count: int) -> d
             continue
 
         events = candidate["events"]
-        rh_events = [
-            event
-            for event in events
-            if event["hand"] == "rh" and not event["isRest"] and event.get("pitches")
-        ]
-        lh_events = [
-            event
-            for event in events
-            if event["hand"] == "lh" and not event["isRest"] and event.get("pitches")
-        ]
+        rh_note_pitches = _note_pitches(events, "rh")
+        lh_note_pitches = _note_pitches(events, "lh")
+        rh_union.update(rh_note_pitches)
+        lh_union.update(lh_note_pitches)
 
-        rh_pitches = [max(int(pitch_value) for pitch_value in event["pitches"]) for event in rh_events]
-        lh_pitches = [min(int(pitch_value) for pitch_value in event["pitches"]) for event in lh_events]
+        if any(pitch_value not in rh_window for pitch_value in rh_note_pitches) or any(
+            pitch_value not in lh_window for pitch_value in lh_note_pitches
+        ):
+            outside_window_count += 1
 
-        if any(pitch_value > 67 for pitch_value in rh_pitches):
-            high_treble_exercises += 1
-        if any(pitch_value < 48 for pitch_value in lh_pitches):
-            low_bass_exercises += 1
+        if any(pitch_value not in rh_pocket for pitch_value in rh_note_pitches) or any(
+            pitch_value not in lh_pocket for pitch_value in lh_note_pitches
+        ):
+            outside_pocket_count += 1
 
-        first_measure_events = [
-            event
-            for event in rh_events
-            if int(event["measure"]) == 1
-        ]
-        if not first_measure_events:
+        if any(pitch_value in rh_upper for pitch_value in rh_note_pitches):
+            rh_upper_count += 1
+        if any(pitch_value in lh_lower for pitch_value in lh_note_pitches):
+            lh_lower_count += 1
+
+        if _has_extension_by_measure(events, "rh", list(rh_upper), 2) or _has_extension_by_measure(
+            events,
+            "lh",
+            list(lh_lower),
+            2,
+        ):
+            early_extension_count += 1
+
+        opening_pitch = _first_primary_pitch(events, "rh")
+        if opening_pitch is None:
             failures.append(request["seed"])
             continue
-
-        opening_pitch = max(int(pitch_value) for pitch_value in first_measure_events[0]["pitches"])
         opening_pitch_counter[opening_pitch] += 1
-        if opening_pitch > 67:
-            high_opening_exercises += 1
 
-    max_opening_share = (
-        max(opening_pitch_counter.values(), default=0) / sample_count if sample_count else 0.0
-    )
+        first_rh_pitch = opening_pitch
+        first_lh_pitch = _first_primary_pitch(events, "lh")
+        if (
+            (first_rh_pitch is not None and first_rh_pitch not in rh_pocket)
+            or (first_lh_pitch is not None and first_lh_pitch not in lh_pocket)
+        ):
+            opening_outside_count += 1
+
+        max_rh_leap = max(max_rh_leap, _max_primary_leap(events, "rh"))
+
     return {
         "sample_count": sample_count,
+        "failures": failures,
         "opening_pitch_counter": opening_pitch_counter,
         "unique_openings": len(opening_pitch_counter),
-        "max_opening_share": max_opening_share,
-        "high_treble_exercises": high_treble_exercises,
-        "high_opening_exercises": high_opening_exercises,
-        "low_bass_exercises": low_bass_exercises,
-        "failures": failures,
+        "rh_union_count": len(rh_union),
+        "lh_union_count": len(lh_union),
+        "rh_upper_count": rh_upper_count,
+        "lh_lower_count": lh_lower_count,
+        "outside_window_count": outside_window_count,
+        "outside_pocket_count": outside_pocket_count,
+        "early_extension_count": early_extension_count,
+        "opening_outside_count": opening_outside_count,
+        "max_rh_leap": max_rh_leap,
     }
 
 
-def _actual_peak_measure(events: list[dict[str, Any]]) -> int | None:
-    measure_peaks: dict[int, int] = {}
-    for event in events:
-        if event["hand"] != "rh" or event["isRest"] or not event.get("pitches"):
-            continue
-        measure_number = int(event["measure"])
-        peak_pitch = max(int(pitch_value) for pitch_value in event["pitches"])
-        measure_peaks[measure_number] = max(measure_peaks.get(measure_number, peak_pitch), peak_pitch)
-    if not measure_peaks:
-        return None
-    center_measure = sorted(measure_peaks)[len(measure_peaks) // 2]
-    return max(
-        measure_peaks.items(),
-        key=lambda item: (item[1], -abs(item[0] - center_measure)),
-    )[0]
-
-
 class GeneratorRegressionTests(unittest.TestCase):
-    def test_grade1_c_major_openings_do_not_collapse_to_one_note(self) -> None:
-        summary = _analyze_batch("C", "cgate", 40)
+    def test_grade1_stage_pocket_batch_rules(self) -> None:
+        for key_signature in ("C", "F", "G"):
+            with self.subTest(key_signature=key_signature):
+                summary = _analyze_stage_batch(key_signature, "g1-pocket", f"{key_signature.lower()}pocket")
+                self.assertEqual([], summary["failures"], msg=f"Unexpected failures: {summary}")
+                self.assertEqual(0, summary["outside_window_count"], msg=f"Pocket stage left the allowed window: {summary}")
+                self.assertEqual(0, summary["outside_pocket_count"], msg=f"Pocket stage escaped the exact five-note pocket: {summary}")
+                self.assertGreaterEqual(
+                    summary["unique_openings"],
+                    4,
+                    msg=f"Pocket stage opening variety was too low: {summary}",
+                )
+                self.assertLessEqual(
+                    summary["max_rh_leap"],
+                    2,
+                    msg=f"Pocket stage RH leaps were too wide: {summary}",
+                )
 
-        self.assertEqual([], summary["failures"], msg=f"Unexpected failures: {summary['failures']}")
-        self.assertGreaterEqual(
-            summary["unique_openings"],
-            5,
-            msg=f"Opening notes were not varied enough: {summary['opening_pitch_counter']}",
-        )
-        self.assertLessEqual(
-            summary["max_opening_share"],
-            0.35,
-            msg=f"One opening pitch dominated too much: {summary['opening_pitch_counter']}",
-        )
-        self.assertGreaterEqual(
-            summary["high_treble_exercises"],
-            10,
-            msg=f"Treble range stayed too central: {summary}",
-        )
-        self.assertGreaterEqual(
-            summary["high_opening_exercises"],
-            6,
-            msg=f"Openings never reached above G often enough: {summary}",
-        )
-        self.assertEqual(
-            summary["sample_count"],
-            summary["low_bass_exercises"],
-            msg=f"Bass did not dip below C often enough: {summary}",
-        )
+    def test_grade1_stage_extend_batch_rules(self) -> None:
+        for key_signature in ("C", "F", "G"):
+            with self.subTest(key_signature=key_signature):
+                summary = _analyze_stage_batch(key_signature, "g1-extend", f"{key_signature.lower()}extend")
+                self.assertEqual([], summary["failures"], msg=f"Unexpected failures: {summary}")
+                self.assertEqual(0, summary["outside_window_count"], msg=f"Extend stage exceeded the stage window: {summary}")
+                self.assertGreaterEqual(
+                    summary["rh_upper_count"],
+                    16,
+                    msg=f"Extend stage did not reach above the RH pocket often enough: {summary}",
+                )
+                self.assertGreaterEqual(
+                    summary["lh_lower_count"],
+                    16,
+                    msg=f"Extend stage did not reach below the LH pocket often enough: {summary}",
+                )
+                self.assertGreaterEqual(
+                    summary["rh_union_count"],
+                    7,
+                    msg=f"Extend stage RH coverage was too narrow: {summary}",
+                )
+                self.assertGreaterEqual(
+                    summary["lh_union_count"],
+                    7,
+                    msg=f"Extend stage LH coverage was too narrow: {summary}",
+                )
+                self.assertGreaterEqual(
+                    summary["early_extension_count"],
+                    16,
+                    msg=f"Extend stage was not touching extension notes early often enough: {summary}",
+                )
+                self.assertLessEqual(
+                    summary["max_rh_leap"],
+                    4,
+                    msg=f"Extend stage RH leaps were too wide: {summary}",
+                )
+
+    def test_grade1_stage_staff_batch_rules(self) -> None:
+        for key_signature in ("C", "F", "G"):
+            with self.subTest(key_signature=key_signature):
+                summary = _analyze_stage_batch(key_signature, "g1-staff", f"{key_signature.lower()}staff")
+                self.assertEqual([], summary["failures"], msg=f"Unexpected failures: {summary}")
+                self.assertEqual(0, summary["outside_window_count"], msg=f"Staff stage exceeded the stage window: {summary}")
+                self.assertGreaterEqual(
+                    summary["rh_upper_count"],
+                    28,
+                    msg=f"Staff stage did not reach above the RH pocket often enough: {summary}",
+                )
+                self.assertGreaterEqual(
+                    summary["lh_lower_count"],
+                    28,
+                    msg=f"Staff stage did not reach below the LH pocket often enough: {summary}",
+                )
+                self.assertGreaterEqual(
+                    summary["rh_union_count"],
+                    9,
+                    msg=f"Staff stage RH coverage was too narrow: {summary}",
+                )
+                self.assertGreaterEqual(
+                    summary["lh_union_count"],
+                    9,
+                    msg=f"Staff stage LH coverage was too narrow: {summary}",
+                )
+                self.assertGreaterEqual(
+                    summary["opening_outside_count"],
+                    12,
+                    msg=f"Staff stage did not open outside the pocket often enough: {summary}",
+                )
+                self.assertLessEqual(
+                    summary["max_rh_leap"],
+                    4,
+                    msg=f"Staff stage RH leaps were too wide: {summary}",
+                )
 
     def test_final_bar_rhythm_varies_across_seeds(self) -> None:
-        """Final-bar rhythm signatures should be varied — not always a whole
-        note.  Regression guard against collapsing back to the hard-override
-        ending that made every piece feel identical."""
         rhythm_signatures: Counter[tuple] = Counter()
         sample_count = 30
         for idx in range(sample_count):
-            request = {**BASE_REQUEST, "keySignature": "C", "seed": f"finalvar{idx}"}
+            request = {**BASE_REQUEST, "gradeStage": "g1-extend", "keySignature": "C", "seed": f"finalvar{idx}"}
             candidate = _select_candidate(request)
             self.assertIsNotNone(candidate, msg=f"Generation failed for seed {request['seed']}")
             events = candidate["events"]  # type: ignore[index]
@@ -208,7 +354,6 @@ class GeneratorRegressionTests(unittest.TestCase):
             3,
             msg=f"Final-bar rhythm was not varied enough: {rhythm_signatures}",
         )
-        # No single rhythm should dominate more than ~75% of outputs.
         dominant_share = max(rhythm_signatures.values()) / sample_count
         self.assertLess(
             dominant_share,
@@ -217,9 +362,14 @@ class GeneratorRegressionTests(unittest.TestCase):
         )
 
     def test_lh_pattern_does_not_repeat_too_many_bars(self) -> None:
-        """LH rhythmic shape should break up at least every ~4 bars instead
-        of sitting on the same pattern for the whole piece."""
-        request = {**BASE_REQUEST, "keySignature": "C", "measureCount": 8, "seed": "lhvary"}
+        request = {
+            **BASE_REQUEST,
+            "gradeStage": "g1-extend",
+            "keySignature": "C",
+            "measureCount": 8,
+            "leftHandPattern": "support-bass",
+            "seed": "lhvary",
+        }
         candidate = _select_candidate(request)
         self.assertIsNotNone(candidate)
         events = candidate["events"]  # type: ignore[index]
@@ -235,13 +385,11 @@ class GeneratorRegressionTests(unittest.TestCase):
                 for event in measure_events
             )
 
-        signatures = [signature(lh_by_measure[m]) for m in sorted(lh_by_measure)]
-        # Excluding the final bar, the longest run of identical signatures
-        # should be < 5 (so the LH doesn't lock into one texture).
+        signatures = [signature(lh_by_measure[measure_number]) for measure_number in sorted(lh_by_measure)]
         non_final = signatures[:-1]
         longest_run = 1
         current_run = 1
-        for prev, curr in zip(non_final, non_final[1:]):
+        for prev, curr in zip(non_final, non_final[1:], strict=False):
             if prev == curr:
                 current_run += 1
                 longest_run = max(longest_run, current_run)
@@ -251,77 +399,4 @@ class GeneratorRegressionTests(unittest.TestCase):
             longest_run,
             5,
             msg=f"LH rhythm signature repeated {longest_run} bars without variation: {signatures}",
-        )
-
-    def test_grade1_f_major_openings_keep_variety_and_range(self) -> None:
-        summary = _analyze_batch("F", "fgate", 20)
-
-        self.assertEqual([], summary["failures"], msg=f"Unexpected failures: {summary['failures']}")
-        self.assertGreaterEqual(
-            summary["unique_openings"],
-            4,
-            msg=f"F-major openings were too repetitive: {summary['opening_pitch_counter']}",
-        )
-        self.assertLessEqual(
-            summary["max_opening_share"],
-            0.45,
-            msg=f"One F-major opening pitch dominated too much: {summary['opening_pitch_counter']}",
-        )
-        self.assertGreaterEqual(
-            summary["high_treble_exercises"],
-            8,
-            msg=f"F-major treble range stayed too central: {summary}",
-        )
-        self.assertGreaterEqual(
-            summary["high_opening_exercises"],
-            4,
-            msg=f"F-major openings never reached above G often enough: {summary}",
-        )
-        self.assertEqual(
-            summary["sample_count"],
-            summary["low_bass_exercises"],
-            msg=f"F-major bass did not dip below C often enough: {summary}",
-        )
-
-    def test_grade1_support_stepwise_prefers_later_peaks(self) -> None:
-        request_template = {
-            **BASE_REQUEST,
-            "keySignature": "C",
-            "coordinationStyle": "support",
-            "rightHandMotion": "stepwise",
-            "leftHandPattern": "repeated",
-            "allowRests": True,
-        }
-        sample_count = 30
-        late_peak_exercises = 0
-        high_peak_exercises = 0
-
-        for idx in range(sample_count):
-            request = {**request_template, "seed": f"peakgate{idx}"}
-            candidate = _select_candidate(request)
-            self.assertIsNotNone(candidate, msg=f"Generation failed for seed {request['seed']}")
-            events = candidate["events"]  # type: ignore[index]
-            peak_measure = _actual_peak_measure(events)
-            self.assertIsNotNone(peak_measure, msg=f"No RH peak found for {request['seed']}")
-            if peak_measure and peak_measure > 1:
-                late_peak_exercises += 1
-
-            rh_events = [
-                event
-                for event in events
-                if event["hand"] == "rh" and not event["isRest"] and event.get("pitches")
-            ]
-            peak_pitch = max(max(int(pitch_value) for pitch_value in event["pitches"]) for event in rh_events)
-            if peak_pitch >= 69:
-                high_peak_exercises += 1
-
-        self.assertGreaterEqual(
-            late_peak_exercises,
-            12,
-            msg=f"Stepwise support reps still peaked too early: {late_peak_exercises}/{sample_count}",
-        )
-        self.assertGreaterEqual(
-            high_peak_exercises,
-            12,
-            msg=f"Stepwise support reps stayed too central: {high_peak_exercises}/{sample_count}",
         )

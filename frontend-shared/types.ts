@@ -10,10 +10,12 @@ export type CoordinationStyle = "support" | "alternating" | "together";
 export type ReadingFocus = "balanced" | "melodic" | "harmonic";
 export type RightHandMotion = "stepwise" | "small-leaps" | "mixed";
 export type LeftHandPattern = "held" | "repeated" | "simple-broken";
+export type GradeStage = "g1-pocket" | "g1-extend" | "g1-staff";
 
 export type ExerciseConfig = {
   mode: ExerciseMode;
   grade: number;
+  gradeStage?: GradeStage;
   timeSignature: TimeSignature;
   measureCount: number;
   tempoPreset: TempoPreset;
@@ -30,6 +32,7 @@ export type ExerciseConfig = {
 
 export type ExerciseSummary = {
   bpm: number;
+  stageLabel?: string;
   handPositionLabel: string;
   coordinationLabel: string;
   phraseShapeLabel: string;

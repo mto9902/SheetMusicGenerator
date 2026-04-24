@@ -4,6 +4,7 @@ from __future__ import annotations
 import random
 from typing import Any
 
+from ..config import request_grade_stage
 from ._types import AccompanimentPlan
 from ._chord import (
     _simultaneous_span_cap,
@@ -96,19 +97,25 @@ def _build_left_pattern(
     if not tones:
         tones = [int(pool[0])]
     grade = int(request["grade"])
+    grade_stage = request_grade_stage(request)
+    low_candidates = list(tones)
+    if grade == 1 and grade_stage in {"g1-pocket", "g1-extend", "g1-staff"}:
+        low_candidates = sorted({*tones, *(int(pitch_value) for pitch_value in pool)})
     low = tones[0]
     if bass_target is not None:
         low = min(
-            tones,
+            low_candidates,
             key=lambda pitch_value: abs(pitch_value - int(bass_target)) + (_nearest_pool_index(pool, pitch_value) * 0.04),
         )
+    elif low_candidates:
+        low = low_candidates[0]
 
     # Phase 9: voice leading — prefer smooth bass motion from previous measure
     if prev_bass_pitch is not None and not is_phrase_start:
         if bass_target is not None:
             target_value = int(bass_target)
             blended_candidates = sorted(
-                tones,
+                low_candidates,
                 key=lambda pitch_value: (
                     abs(pitch_value - target_value) * 0.72
                     + abs(pitch_value - prev_bass_pitch) * 0.38
@@ -125,7 +132,7 @@ def _build_left_pattern(
                     low = best
                 else:
                     stepwise_candidates = [
-                        pitch_value for pitch_value in tones
+                        pitch_value for pitch_value in low_candidates
                         if abs(pitch_value - prev_bass_pitch) <= 5
                     ]
                     if stepwise_candidates:
@@ -141,7 +148,7 @@ def _build_left_pattern(
                             ),
                         )
         else:
-            smooth_candidates = sorted(tones, key=lambda p: abs(p - prev_bass_pitch))
+            smooth_candidates = sorted(low_candidates, key=lambda p: abs(p - prev_bass_pitch))
             if smooth_candidates and abs(smooth_candidates[0] - prev_bass_pitch) <= 5:
                 low = smooth_candidates[0]
     max_lh_span = _simultaneous_span_cap(

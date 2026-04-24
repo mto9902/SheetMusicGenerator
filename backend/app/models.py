@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from .config import GRADE_PRESETS
+from .config import GRADE_PRESETS, normalize_grade_stage
 
 
 ExerciseMode = Literal["piano", "rhythm"]
@@ -20,6 +20,7 @@ CoordinationStyle = Literal["support", "alternating", "together"]
 ReadingFocus = Literal["balanced", "melodic", "harmonic"]
 RightHandMotion = Literal["stepwise", "small-leaps", "mixed"]
 LeftHandPattern = Literal["held", "repeated", "simple-broken"]
+GradeStage = Literal["g1-pocket", "g1-extend", "g1-staff"]
 Grade = Literal[1, 2, 3, 4, 5]
 
 ALLOWED_MEASURE_COUNTS = {4, 8, 12}
@@ -33,6 +34,7 @@ def _max_bars_for_grade(grade: int) -> int:
 class ExerciseRequest(BaseModel):
     mode: ExerciseMode
     grade: Grade = Field(ge=1, le=5)
+    gradeStage: GradeStage | None = None
     timeSignature: TimeSignature
     measureCount: int = Field(ge=4, le=12)
     tempoPreset: TempoPreset
@@ -64,11 +66,14 @@ class ExerciseRequest(BaseModel):
         if self.grade < 4:
             self.allowAccidentals = False
 
+        self.gradeStage = normalize_grade_stage(self.grade, self.mode, self.gradeStage)
+
         return self
 
 
 class ExerciseSummary(BaseModel):
     bpm: int
+    stageLabel: str | None = None
     handPositionLabel: str
     coordinationLabel: str
     phraseShapeLabel: str

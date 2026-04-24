@@ -5,6 +5,8 @@ import math
 import random
 from typing import Any
 
+from ..config import grade_one_stage_spec, request_grade_stage
+
 from ._types import (
     AccompanimentPlan,
     AnchorTone,
@@ -363,6 +365,7 @@ def _build_motive_blueprint(
     rng: random.Random,
     *,
     measure_total: float = 0.0,
+    grade_stage: str | None = None,
 ) -> dict[str, Any]:
     source_blueprint = source_blueprint or {}
     source_durations = list(source_blueprint.get("answerDurations") or source_blueprint.get("durations") or [])
@@ -386,6 +389,8 @@ def _build_motive_blueprint(
         template_pool = _MOTIVE_STEP_TEMPLATES.get(contour, _MOTIVE_STEP_TEMPLATES["flat"])
         step_template = rng.choice(template_pool)
         motif_steps = _adapt_step_template(step_template, note_count - 1)
+    if grade_stage == "g1-pocket":
+        motif_steps = [max(-1, min(1, int(step))) for step in motif_steps]
 
     answer_seed = source_durations if inherit_rhythm and source_durations else answer_cell
     answer_durations = _coherent_answer_durations(motif_durations, answer_seed, allowed_durations, rng)
@@ -448,7 +453,13 @@ def _texture_ceiling_for_grade(grade: int) -> str:
 def _build_style_profile(request: dict[str, Any], preset: dict[str, Any]) -> StyleProfile:
     piano_rules = preset["piano"]
     grade = int(request["grade"])
+    grade_stage = request_grade_stage(request)
     focus = str(request.get("readingFocus", "balanced"))
+    register_floor = float(_REGISTER_MAPS.get(grade, _REGISTER_MAPS[5])["floor"])
+    register_peak = float(_REGISTER_MAPS.get(grade, _REGISTER_MAPS[5])["peak"])
+    if grade == 1 and grade_stage is not None:
+        register_floor = 0.0
+        register_peak = 1.0
     connection_scale = {
         1: ("arrival", "lead_in", "passing"),
         2: ("arrival", "lead_in", "passing", "neighbor"),
@@ -472,15 +483,17 @@ def _build_style_profile(request: dict[str, Any], preset: dict[str, Any]) -> Sty
         search_attempts += 4
     if grade >= 5:
         search_attempts += 12
+    if grade == 1 and grade_stage == "g1-pocket":
+        search_attempts += 8
+    elif grade == 1 and grade_stage in {"g1-extend", "g1-staff"}:
+        search_attempts += 6
     return StyleProfile(
         grade=grade,
+        grade_stage=grade_stage,
         focus=focus,
         cadence_strength=float(piano_rules.get("cadenceStrictness", 0.85)),
         left_hand_persistence=float(piano_rules.get("leftPatternPersistence", 0.85)),
-        register_span=(
-            float(_REGISTER_MAPS.get(grade, _REGISTER_MAPS[5])["floor"]),
-            float(_REGISTER_MAPS.get(grade, _REGISTER_MAPS[5])["peak"]),
-        ),
+        register_span=(register_floor, register_peak),
         texture_ceiling=_texture_ceiling_for_grade(grade),
         allowed_connection_functions=connection_scale.get(grade, connection_scale[max(connection_scale)]),
         allowed_ornament_functions=ornaments,
@@ -1107,6 +1120,7 @@ def _build_top_line_plan(
     answer_form: str,
     style_profile: StyleProfile,
     piece_plan: PiecePlan,
+    rng: random.Random,
     phrase_grammar: PhraseGrammar | None = None,
 ) -> TopLinePlan:
     register_targets: dict[int, float] = {}
@@ -1123,6 +1137,38 @@ def _build_top_line_plan(
         )
     elif piece_plan.apex_measure in phrase_measures:
         peak_measure = piece_plan.apex_measure
+    if style_profile.grade == 1 and style_profile.grade_stage in {"g1-extend", "g1-staff"} and len(phrase_measures) >= 2:
+        peak_measure = phrase_measures[min(1, len(phrase_measures) - 1)]
+
+    stage_slots: dict[int, float] = {}
+    if style_profile.grade == 1 and phrase_measures:
+        if style_profile.grade_stage == "g1-pocket":
+            palette = [0.0, 0.25, 0.5, 0.75, 1.0]
+            start_index = rng.randrange(len(palette))
+            direction = rng.choice([-1, 1])
+            indices = [start_index]
+            while len(indices) < len(phrase_measures):
+                next_index = indices[-1] + direction
+                if next_index < 0 or next_index >= len(palette):
+                    direction *= -1
+                    next_index = indices[-1] + direction
+                indices.append(max(0, min(len(palette) - 1, next_index)))
+        elif style_profile.grade_stage == "g1-extend":
+            palette = [0.0, 1 / 6, 2 / 6, 3 / 6, 4 / 6, 5 / 6, 1.0]
+            rotation = rng.randrange(len(palette))
+            indices = [rotation, (rotation + 2) % 7, (rotation + 4) % 7, (rotation + 1) % 7]
+        elif style_profile.grade_stage == "g1-staff":
+            palette = [index / 8 for index in range(9)]
+            rotation = rng.randrange(len(palette))
+            indices = [rotation, (rotation + 3) % 9, (rotation + 6) % 9, (rotation + 2) % 9]
+        else:
+            palette = []
+            indices = []
+        for index, measure_number in enumerate(phrase_measures):
+            if palette:
+                stage_slots[measure_number] = float(palette[indices[min(index, len(indices) - 1)]])
+        if stage_slots:
+            peak_measure = max(stage_slots, key=stage_slots.get)
 
     for index, measure_number in enumerate(phrase_measures):
         position = index / max(1, len(phrase_measures) - 1) if len(phrase_measures) > 1 else 0.5
@@ -1137,6 +1183,35 @@ def _build_top_line_plan(
             min(style_profile.register_span[1], register_slot + 0.08),
         )
         measure_role = role_by_measure.get(measure_number, "develop")
+        if style_profile.grade == 1:
+            if style_profile.grade_stage == "g1-pocket":
+                if measure_role == "establish" and index == 0:
+                    register_targets[measure_number] = max(
+                        style_profile.register_span[0],
+                        min(style_profile.register_span[1], 0.46 if phrase_index == 0 else 0.42),
+                    )
+            elif style_profile.grade_stage == "g1-extend":
+                if measure_role == "establish" and index == 0:
+                    register_targets[measure_number] = max(
+                        register_targets[measure_number],
+                        min(style_profile.register_span[1], 0.62 if phrase_index == 0 else 0.58),
+                    )
+                if measure_number == peak_measure:
+                    register_targets[measure_number] = max(
+                        register_targets[measure_number],
+                        min(style_profile.register_span[1], 0.86 if phrase_index == 0 else 0.8),
+                    )
+            elif style_profile.grade_stage == "g1-staff":
+                if measure_role == "establish" and index == 0:
+                    register_targets[measure_number] = max(
+                        register_targets[measure_number],
+                        min(style_profile.register_span[1], 0.72 if phrase_index == 0 else 0.66),
+                    )
+                if measure_number == peak_measure:
+                    register_targets[measure_number] = max(
+                        register_targets[measure_number],
+                        min(style_profile.register_span[1], 0.92 if phrase_index == 0 else 0.88),
+                    )
         if style_profile.grade <= 2 and measure_role == "establish" and index == 0:
             opening_energy = float(phrase_grammar.opening_energy) if phrase_grammar is not None else 0.5
             normalized_energy = max(0.0, min(1.0, (opening_energy - 0.35) / 0.30))
@@ -1157,6 +1232,20 @@ def _build_top_line_plan(
             register_targets[measure_number] = max(
                 register_targets[measure_number],
                 0.82 if phrase_index == 0 else 0.76,
+            )
+        if measure_number in stage_slots:
+            register_targets[measure_number] = max(
+                style_profile.register_span[0],
+                min(style_profile.register_span[1], stage_slots[measure_number]),
+            )
+        if (
+            style_profile.grade == 1
+            and style_profile.grade_stage == "g1-staff"
+            and measure_number == peak_measure
+        ):
+            register_targets[measure_number] = max(
+                register_targets[measure_number],
+                min(style_profile.register_span[1], 0.88 if phrase_index == 0 else 0.84),
             )
         pitch_roles[measure_number] = _top_pitch_role_for_measure(
             measure_role,
@@ -1185,20 +1274,66 @@ def _build_bass_line_plan(
     role_by_measure: dict[int, str],
     cadence_target: str,
     style_profile: StyleProfile,
+    rng: random.Random,
 ) -> BassLinePlan:
     register_targets: dict[int, float] = {}
     pitch_roles: dict[int, str] = {}
     motion_roles: dict[int, str] = {}
     low_span = max(0.02, style_profile.register_span[0] * 0.55)
     high_span = max(low_span + 0.06, style_profile.register_span[0] + 0.12)
+    register_cap = 0.28
+    if style_profile.grade == 1:
+        if style_profile.grade_stage == "g1-pocket":
+            low_span = 0.12
+            high_span = 0.48
+            register_cap = 0.56
+        elif style_profile.grade_stage == "g1-extend":
+            low_span = 0.08
+            high_span = 0.66
+            register_cap = 0.74
+        elif style_profile.grade_stage == "g1-staff":
+            low_span = 0.04
+            high_span = 0.86
+            register_cap = 0.96
+
+    stage_slots: dict[int, float] = {}
+    if style_profile.grade == 1 and phrase_measures:
+        if style_profile.grade_stage == "g1-pocket":
+            palette = [0.0, 0.25, 0.5, 0.75, 1.0]
+            rotation = rng.randrange(len(palette))
+            indices = [rotation, (rotation + 2) % 5, (rotation + 4) % 5, (rotation + 1) % 5]
+        elif style_profile.grade_stage == "g1-extend":
+            palette = [0.0, 1 / 6, 2 / 6, 3 / 6, 4 / 6, 5 / 6, 1.0]
+            rotation = rng.randrange(len(palette))
+            indices = [rotation % 3, (rotation + 2) % 7, (rotation + 4) % 7, (rotation + 6) % 7]
+        elif style_profile.grade_stage == "g1-staff":
+            palette = [index / 9 for index in range(10)]
+            rotation = rng.randrange(len(palette))
+            indices = [rotation % 4, (rotation + 3) % 10, (rotation + 6) % 10, (rotation + 8) % 10]
+        else:
+            palette = []
+            indices = []
+        for index, measure_number in enumerate(phrase_measures):
+            if palette:
+                stage_slots[measure_number] = float(palette[indices[min(index, len(indices) - 1)]])
 
     for index, measure_number in enumerate(phrase_measures):
         measure_role = role_by_measure.get(measure_number, "develop")
         position = index / max(1, len(phrase_measures) - 1) if len(phrase_measures) > 1 else 0.5
         register_targets[measure_number] = max(
             0.02,
-            min(0.28, low_span + (high_span - low_span) * position),
+            min(register_cap, low_span + (high_span - low_span) * position),
         )
+        if style_profile.grade == 1 and style_profile.grade_stage in {"g1-extend", "g1-staff"} and index <= 1:
+            register_targets[measure_number] = min(
+                register_targets[measure_number],
+                0.2 if style_profile.grade_stage == "g1-staff" else 0.28,
+            )
+        if measure_number in stage_slots:
+            register_targets[measure_number] = max(
+                0.02,
+                min(register_cap, stage_slots[measure_number]),
+            )
         pitch_roles[measure_number] = _bass_pitch_role_for_measure(
             index,
             measure_role,
@@ -1793,6 +1928,7 @@ def _pick_phrase_plan(
         answer_form,
         style_profile,
         piece_plan,
+        rng,
         phrase_grammar=phrase_grammar,
     )
     bass_line_plan = _build_bass_line_plan(
@@ -1801,6 +1937,7 @@ def _pick_phrase_plan(
         role_by_measure,
         cadence_target,
         style_profile,
+        rng,
     )
 
     source_motive_blueprint = dict(previous_phrase_plan.get("_motiveBlueprint") or {}) if previous_phrase_plan else {}
@@ -1900,6 +2037,7 @@ def _pick_phrase_plan(
         inherit_contour,
         rng,
         measure_total=_measure_total(request["timeSignature"]),
+        grade_stage=style_profile.grade_stage,
     )
     continuation_by_measure = _build_continuation_plan(
         phrase_archetype,

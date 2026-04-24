@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { EXERCISE_OPTIONS } from "@shared/options";
+import { EXERCISE_OPTIONS, formatGradeStageLabel as formatConfigStageLabel } from "@shared/options";
 import {
   formatDuration,
   formatHandPositionLabel,
@@ -115,6 +115,9 @@ export function HomePage() {
                   `Grade ${lastConfig.grade}`
                 }
               />
+              {lastConfig.gradeStage ? (
+                <SummaryRow label="Grade stage" value={formatConfigStageLabel(lastConfig.gradeStage)} />
+              ) : null}
             </div>
           ) : (
             <p className="empty-copy">
@@ -133,6 +136,9 @@ export function HomePage() {
           {recentExercises.length ? (
             <div className="stack-list">
               {recentExercises.map((exercise) => (
+                (() => {
+                  const stageLabel = formatConfigStageLabel(exercise.config.gradeStage);
+                  return (
                 <button
                   key={exercise.exerciseId}
                   type="button"
@@ -144,10 +150,13 @@ export function HomePage() {
                     <span>
                       {formatHandPositionLabel(exercise.config.handPosition)} | {exercise.config.timeSignature} |{" "}
                       {exercise.config.measureCount} bars
+                      {stageLabel ? ` | ${stageLabel}` : ""}
                     </span>
                   </div>
                   <span className="list-item__meta">{formatTimeAgo(exercise.createdAt)}</span>
                 </button>
+                  );
+                })()
               ))}
             </div>
           ) : (

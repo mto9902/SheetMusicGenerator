@@ -8,10 +8,12 @@ from typing import Any
 from ..config import (
     COORDINATION_LABELS,
     GRADE_LABELS,
+    GRADE_STAGE_LABELS,
     HAND_ACTIVITY_LABELS,
     POSITION_LABELS,
     TEMPO_BY_PRESET,
     is_minor_key,
+    request_grade_stage,
 )
 from ..audio import render_audio_data_uri
 from ._types import QualityGateResult
@@ -37,12 +39,16 @@ def build_exercise(request: dict[str, Any]) -> dict[str, Any]:
     bpm = int(TEMPO_BY_PRESET[request["tempoPreset"]])
     key_label = request["keySignature"]
     debug_payload: dict[str, Any] | None = None
+    grade_stage = request_grade_stage(request)
+    stage_label = GRADE_STAGE_LABELS.get(grade_stage or "", "")
     title = (
         f"Piano Rhythm - {request['timeSignature']} - Grade {request['grade']}"
         if request["mode"] == "rhythm"
         else f"Piano Reading - {key_label}{' minor' if is_minor_key(request['keySignature']) else ''} "
         f"{request['timeSignature']} - Grade {request['grade']}"
     )
+    if stage_label and request["mode"] == "piano" and int(request["grade"]) == 1:
+        title = f"{title} - {stage_label}"
 
     if request["mode"] == "rhythm":
         for attempt in range(8):
@@ -146,6 +152,7 @@ def build_exercise(request: dict[str, Any]) -> dict[str, Any]:
             "harmonyFocus": _harmony_focus(request, events),
             "techniqueFocus": _technique_focus(events),
             "rhythmFocus": _reading_focus(request, events),
+            "stageLabel": stage_label or None,
             "seedLabel": f"{GRADE_LABELS[request['grade']]} - {str(request['seed'])[-6:]}",
         },
         "debug": debug_payload,

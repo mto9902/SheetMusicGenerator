@@ -8,8 +8,11 @@ from typing import Any
 from ..config import (
     COORDINATION_LABELS,
     HAND_ACTIVITY_LABELS,
+    HAND_POSITION_ROOTS,
     KEY_TONIC_PITCH_CLASS,
     READING_FOCUS_LABELS,
+    request_grade_stage,
+    request_max_leap,
 )
 from ._types import (
     AccompanimentPlan,
@@ -23,7 +26,7 @@ from ._types import (
     TopLinePlan,
 )
 from ._helpers import _measure_total, _pulse_value, _preset_for_grade, _signature_similarity, _mean
-from ._pitch import _key_pitch_classes
+from ._pitch import _key_pitch_classes, _position_stage_zones
 from ._chord import (
     _chord_pitch_classes,
     _rh_lead_pitch,
@@ -49,6 +52,172 @@ def _strong_beat(offset: float, signature: str) -> bool:
 
 def _validate_accidental_resolution(events: list[dict[str, Any]]) -> bool:
     return True
+
+
+def _grade_one_stage_zones(request: dict[str, Any]) -> dict[str, Any] | None:
+    grade_stage = request_grade_stage(request)
+    if (
+        int(request.get("grade", 1)) != 1
+        or str(request.get("mode", "piano")) != "piano"
+        or grade_stage is None
+    ):
+        return None
+
+    hand_position = str(request.get("handPosition", "C"))
+    return {
+        "grade_stage": grade_stage,
+        "rh": _position_stage_zones(
+            HAND_POSITION_ROOTS["rh"][hand_position],
+            str(request["keySignature"]),
+            hand="rh",
+            grade=1,
+            grade_stage=grade_stage,
+        ),
+        "lh": _position_stage_zones(
+            HAND_POSITION_ROOTS["lh"][hand_position],
+            str(request["keySignature"]),
+            hand="lh",
+            grade=1,
+            grade_stage=grade_stage,
+        ),
+    }
+
+
+def _hand_note_pitches(events: list[dict[str, Any]], hand: str) -> list[int]:
+    pitches: list[int] = []
+    for event in events:
+        if event["hand"] != hand or event["isRest"]:
+            continue
+        pitches.extend(int(pitch_value) for pitch_value in event.get("pitches", []))
+    return pitches
+
+
+def _hand_primary_pitches(events: list[dict[str, Any]], hand: str) -> list[int]:
+    primary_pitches: list[int] = []
+    for event in events:
+        if event["hand"] != hand or event["isRest"] or not event.get("pitches"):
+            continue
+        pitch_value = _rh_lead_pitch(event) if hand == "rh" else _lh_bass_pitch(event)
+        if pitch_value is not None:
+            primary_pitches.append(int(pitch_value))
+    return primary_pitches
+
+
+def _first_primary_pitch(events: list[dict[str, Any]], hand: str) -> int | None:
+    pitches = _hand_primary_pitches(events, hand)
+    return pitches[0] if pitches else None
+
+
+def _max_primary_leap(events: list[dict[str, Any]], hand: str) -> int:
+    primary_pitches = _hand_primary_pitches(events, hand)
+    if len(primary_pitches) < 2:
+        return 0
+    return max(
+        abs(right_pitch - left_pitch)
+        for left_pitch, right_pitch in zip(primary_pitches, primary_pitches[1:], strict=False)
+    )
+
+
+def _stage_extension_seen_by_measure(
+    events: list[dict[str, Any]],
+    hand: str,
+    extension_pitches: list[int],
+    max_measure: int,
+) -> bool:
+    extension_set = set(int(pitch_value) for pitch_value in extension_pitches)
+    if not extension_set:
+        return False
+    for event in events:
+        if (
+            event["hand"] != hand
+            or event["isRest"]
+            or int(event["measure"]) > max_measure
+        ):
+            continue
+        if any(int(pitch_value) in extension_set for pitch_value in event.get("pitches", [])):
+            return True
+    return False
+
+
+def _grade_one_stage_coverage_score(request: dict[str, Any], events: list[dict[str, Any]]) -> float:
+    stage_zones = _grade_one_stage_zones(request)
+    if stage_zones is None:
+        return 0.75
+
+    grade_stage = str(stage_zones["grade_stage"])
+    rh_window = set(int(pitch_value) for pitch_value in stage_zones["rh"]["window"])
+    lh_window = set(int(pitch_value) for pitch_value in stage_zones["lh"]["window"])
+    rh_pocket = set(int(pitch_value) for pitch_value in stage_zones["rh"]["pocket"])
+    lh_pocket = set(int(pitch_value) for pitch_value in stage_zones["lh"]["pocket"])
+    rh_upper = set(int(pitch_value) for pitch_value in stage_zones["rh"]["upper_extension"])
+    lh_lower = set(int(pitch_value) for pitch_value in stage_zones["lh"]["lower_extension"])
+
+    rh_pitches = _hand_note_pitches(events, "rh")
+    lh_pitches = _hand_note_pitches(events, "lh")
+    if not rh_pitches and not lh_pitches:
+        return 0.0
+
+    rh_inside = 1.0 if all(pitch_value in rh_window for pitch_value in rh_pitches) else 0.0
+    lh_inside = 1.0 if all(pitch_value in lh_window for pitch_value in lh_pitches) else 0.0
+    legal_range_score = 0.5 * rh_inside + 0.5 * lh_inside
+
+    rh_max_leap = _max_primary_leap(events, "rh")
+    rh_leap_score = 1.0 if rh_max_leap <= request_max_leap(request, 7) else 0.0
+
+    first_rh_pitch = _first_primary_pitch(events, "rh")
+    first_lh_pitch = _first_primary_pitch(events, "lh")
+    opens_outside_pocket = float(
+        (first_rh_pitch is not None and first_rh_pitch not in rh_pocket)
+        or (first_lh_pitch is not None and first_lh_pitch not in lh_pocket)
+    )
+    opening_position_score = 0.7
+    rh_pocket_list = list(stage_zones["rh"]["pocket"])
+    if first_rh_pitch is not None and first_rh_pitch in rh_pocket and len(rh_pocket_list) > 1:
+        pocket_index = rh_pocket_list.index(first_rh_pitch)
+        opening_position_score = 0.55 + (pocket_index / (len(rh_pocket_list) - 1)) * 0.45
+
+    rh_touches_upper = float(any(pitch_value in rh_upper for pitch_value in rh_pitches))
+    lh_touches_lower = float(any(pitch_value in lh_lower for pitch_value in lh_pitches))
+    early_extension = float(
+        _stage_extension_seen_by_measure(events, "rh", list(rh_upper), 2)
+        or _stage_extension_seen_by_measure(events, "lh", list(lh_lower), 2)
+    )
+    rh_variety = min(1.0, len(set(rh_pitches)) / 4.0) if rh_pitches else 0.0
+    lh_variety = min(1.0, len(set(lh_pitches)) / 4.0) if lh_pitches else 0.0
+
+    if grade_stage == "g1-pocket":
+        pocket_only = float(
+            all(pitch_value in rh_pocket for pitch_value in rh_pitches)
+            and all(pitch_value in lh_pocket for pitch_value in lh_pitches)
+        )
+        return (
+            0.45 * pocket_only
+            + 0.20 * rh_leap_score
+            + 0.15 * opening_position_score
+            + 0.10 * rh_variety
+            + 0.10 * lh_variety
+        )
+
+    if grade_stage == "g1-extend":
+        return (
+            0.18 * legal_range_score
+            + 0.14 * rh_leap_score
+            + 0.18 * rh_touches_upper
+            + 0.18 * lh_touches_lower
+            + 0.12 * early_extension
+            + 0.10 * rh_variety
+            + 0.10 * lh_variety
+        )
+
+    return (
+        0.16 * legal_range_score
+        + 0.12 * rh_leap_score
+        + 0.18 * rh_touches_upper
+        + 0.18 * lh_touches_lower
+        + 0.12 * opens_outside_pocket
+        + 0.12 * rh_variety
+        + 0.12 * lh_variety
+    )
 
 
 def _validate_strong_beat_harmony(request: dict[str, Any], events: list[dict[str, Any]]) -> bool:
@@ -1672,6 +1841,7 @@ def _evaluate_candidate(request: dict[str, Any], candidate: dict[str, Any]) -> E
     difficulty_score = _difficulty_smoothness_score(request, events, phrase_plans)
     chunkability_score = _sight_reading_chunkability_score(events, phrase_plans)
     beginner_variety_score = _beginner_variety_score(request, events, phrase_plans)
+    stage_coverage_score = _grade_one_stage_coverage_score(request, events)
     phrase_coherence = (
         continuation_score * 0.36
         + contour_score * 0.24
@@ -1693,6 +1863,7 @@ def _evaluate_candidate(request: dict[str, Any], candidate: dict[str, Any]) -> E
         (bass_score, 1.2),
         (visible_motion_score, 1.7),
         (beginner_variety_score, 1.25 if int(request["grade"]) <= 2 else 0.0),
+        (stage_coverage_score, 1.6 if int(request["grade"]) == 1 else 0.0),
         (foreground_score, 1.45),
         (vertical_score, 1.25),
         (difficulty_score, 1.15),
@@ -1720,6 +1891,7 @@ def _evaluate_candidate(request: dict[str, Any], candidate: dict[str, Any]) -> E
         bass_function=bass_score,
         visible_motion=visible_motion_score,
         beginner_variety=beginner_variety_score,
+        stage_coverage=stage_coverage_score,
         foreground_background_clarity=foreground_score,
         vertical_balance=vertical_score,
         total=total,
@@ -1789,12 +1961,20 @@ def _quality_gate_result(
     else:
         # Grades 1-2: keep outputs simple, but still require visible motion so
         # desktop notation does not flatten into the same bar anchors repeatedly.
+        grade_stage = request_grade_stage(request)
         visible_motion_threshold = (
             0.60
             if str(request.get("handActivity", "both")) == "both"
             and str(request.get("coordinationStyle", "support")) == "together"
             else 0.42
         )
+        stage_coverage_threshold = 0.0
+        if grade == 1 and str(request.get("mode", "piano")) == "piano":
+            stage_coverage_threshold = {
+                "g1-pocket": 0.88,
+                "g1-extend": 0.62,
+                "g1-staff": 0.66,
+            }.get(str(grade_stage), 0.62)
         checks = [
             ("overall total", evaluation.total, 0.58),
             ("phrase coherence", evaluation.phrase_coherence, 0.50),
@@ -1802,7 +1982,11 @@ def _quality_gate_result(
             ("visible motion", evaluation.visible_motion, visible_motion_threshold),
             ("beginner variety", evaluation.beginner_variety, 0.62),
         ]
+        if stage_coverage_threshold > 0.0:
+            checks.append(("stage coverage", evaluation.stage_coverage, stage_coverage_threshold))
         hard_checks = {"cadence preparation", "visible motion", "beginner variety"}
+        if stage_coverage_threshold > 0.0:
+            hard_checks.add("stage coverage")
         leniency_max_reasons = 1
         leniency_gate = 0.95
         leniency_total = 0.62
@@ -1899,6 +2083,11 @@ def _technique_focus(events: list[dict[str, Any]]) -> list[str]:
 
 def _validate_events(request: dict[str, Any], events: list[dict[str, Any]]) -> bool:
     total = _measure_total(request["timeSignature"])
+    stage_zones = _grade_one_stage_zones(request)
+    max_rh_leap = request_max_leap(
+        request,
+        int(_preset_for_grade(request["grade"])["piano"]["maxLeapSemitones"]),
+    )
 
     for hand in ("rh", "lh"):
         if (hand == "rh" and request["handActivity"] == "left-only") or (
@@ -1907,6 +2096,11 @@ def _validate_events(request: dict[str, Any], events: list[dict[str, Any]]) -> b
             continue
 
         previous_pitch = None
+        allowed_window = (
+            set(int(pitch_value) for pitch_value in stage_zones[hand]["window"])
+            if stage_zones is not None
+            else None
+        )
         for measure_number in range(1, int(request["measureCount"]) + 1):
             hand_events = [
                 event for event in events if event["hand"] == hand and int(event["measure"]) == measure_number
@@ -1919,11 +2113,15 @@ def _validate_events(request: dict[str, Any], events: list[dict[str, Any]]) -> b
             for event in hand_events:
                 if event["isRest"] or not event["pitches"]:
                     continue
+                if allowed_window is not None and any(
+                    int(pitch_value) not in allowed_window for pitch_value in event["pitches"]
+                ):
+                    return False
                 pitch_value = _event_primary_pitch(event)
                 if pitch_value is None:
                     continue
                 if previous_pitch is not None and hand == "rh":
-                    if abs(pitch_value - previous_pitch) > int(_preset_for_grade(request["grade"])["piano"]["maxLeapSemitones"]):
+                    if abs(pitch_value - previous_pitch) > max_rh_leap:
                         return False
                 previous_pitch = pitch_value
 

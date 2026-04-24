@@ -4,7 +4,7 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from ..config import HAND_POSITION_ROOTS, KEY_TONIC_PITCH_CLASS
+from ..config import HAND_POSITION_ROOTS, KEY_TONIC_PITCH_CLASS, request_grade_stage, request_max_leap
 from ._helpers import _preset_for_grade, _measure_total, _pulse_value, _fit_measure
 from ._pitch import _position_pitches_from_root, _shift_root
 from ._harmony import _harmonic_plan, _phrase_form_template
@@ -69,6 +69,7 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
     preset = _preset_for_grade(grade)
     piano = preset["piano"]
     style_profile = _build_style_profile(request, preset)
+    grade_stage = request_grade_stage(request)
     total = _measure_total(request["timeSignature"])
     pulse = _pulse_value(request["timeSignature"])
 
@@ -99,6 +100,7 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
     )
     pool_size = int(piano.get("poolSize", 5))
     max_leap = int(piano.get("maxLeapSemitones", 7))
+    max_leap = request_max_leap(request, max_leap)
     # Harden RH motion selector: clamp max_leap so "stepwise" can't leap and
     # "small-leaps" gets more room than the base preset.  Weights alone don't
     # penetrate when top-line targets pre-determine bar boundaries, so this
@@ -118,6 +120,7 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
         pool_size,
         hand="rh",
         grade=grade,
+        grade_stage=str(request.get("gradeStage")) if request.get("gradeStage") else None,
     )
     lh_pool_size = max(8, pool_size)
     lh_pool = _position_pitches_from_root(
@@ -126,6 +129,7 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
         lh_pool_size,
         hand="lh",
         grade=grade,
+        grade_stage=str(request.get("gradeStage")) if request.get("gradeStage") else None,
     )
 
     rh_weights = _weights_for_hand("rh", preset, request)
@@ -164,7 +168,15 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
     # Honor the user's leftHandPattern selection: if preferred families
     # intersect with what this grade allows, restrict available_lh to those
     # preferred families so the user-facing choice actually changes output.
-    if preferred_lh and set(available_lh) & preferred_lh:
+    if (
+        preferred_lh
+        and set(available_lh) & preferred_lh
+        and not (
+            grade == 1
+            and str(request.get("mode", "piano")) == "piano"
+            and grade_stage is not None
+        )
+    ):
         available_lh = [family for family in available_lh if family in preferred_lh]
     coordination_style = str(request.get("coordinationStyle", "support"))
     hand_activity = str(request.get("handActivity", "both"))
@@ -175,7 +187,16 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
     for family in available_lh:
         weight = _LH_FAMILY_WEIGHT.get(family, 0.5)
         if family in preferred_lh:
-            weight *= 2.35
+            preferred_boost = 1.35 if grade == 1 and grade_stage is not None else 2.35
+            weight *= preferred_boost
+        if grade == 1 and grade_stage in {"g1-extend", "g1-staff"}:
+            if family == "held":
+                weight *= 0.48
+            elif family in {"repeated", "support-bass"}:
+                weight *= 1.55
+        elif grade == 1 and grade_stage == "g1-pocket":
+            if family == "repeated":
+                weight *= 1.15
         if grade <= 2 and hand_activity == "both":
             if coordination_style == "together":
                 if family in {"block-half", "bass-and-chord", "block-quarter"}:
@@ -260,6 +281,7 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
                     pool_size,
                     hand="rh",
                     grade=grade,
+                    grade_stage=str(request.get("gradeStage")) if request.get("gradeStage") else None,
                 )
                 lh_pool = _position_pitches_from_root(
                     left_root,
@@ -267,6 +289,7 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
                     lh_pool_size,
                     hand="lh",
                     grade=grade,
+                    grade_stage=str(request.get("gradeStage")) if request.get("gradeStage") else None,
                 )
                 rh_pitch = min(rh_pool, key=lambda pitch_value: abs(pitch_value - rh_pitch))
                 lh_pitch = min(lh_pool, key=lambda pitch_value: abs(pitch_value - lh_pitch))
@@ -331,6 +354,10 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
                         rh_events, rh_pool,
                         request["keySignature"], rh_pitch, total,
                     )
+                    for updated_event in reversed(rh_events):
+                        if not updated_event.get("isRest") and updated_event.get("pitches"):
+                            rh_pitch = int(updated_event["pitches"][-1])
+                            break
                 if is_piece_final_rh and rh_events:
                     _apply_piece_ending(
                         rh_events, rh_pool,
@@ -339,6 +366,10 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
                         grade=grade,
                         rng=rng,
                     )
+                    for updated_event in reversed(rh_events):
+                        if not updated_event.get("isRest") and updated_event.get("pitches"):
+                            rh_pitch = int(updated_event["pitches"][-1])
+                            break
 
                 for event in _measure_events_with_offsets(measure_number, measure_offset, rh_events):
                     event["harmony"] = harmony

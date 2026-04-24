@@ -23,6 +23,7 @@ from ._chord import (
     _build_voiced_block_chord,
     _stable_tone,
     _weighted_pitch_select,
+    _event_primary_pitch,
 )
 
 
@@ -180,6 +181,10 @@ def _realize_motive_fragment(
         if target_pitch is not None and not recent:
             target_index = _nearest_pool_index(pool, int(target_pitch))
             opening_candidates = list(harmony_tones)
+            if len(pool) <= 5:
+                opening_candidates = sorted({*opening_candidates, *pool})
+            elif len(pool) >= 9:
+                opening_candidates = sorted({*opening_candidates, *pool})
             anchor_pitch = _choose_line_opening_pitch(
                 pool,
                 opening_candidates,
@@ -195,8 +200,9 @@ def _realize_motive_fragment(
 
     desired_index = _nearest_pool_index(pool, anchor_pitch)
     if transform == "sequence":
-        # Phase 10: wider transposition (a third instead of a step)
-        shift = 2 if direction >= 0 else -2
+        # Keep Grade 1 pocket sequences inside the same five-note reading cell.
+        shift_size = 1 if max_leap <= 2 or len(pool) <= 5 else 2
+        shift = shift_size if direction >= 0 else -shift_size
         desired_index = max(0, min(len(pool) - 1, desired_index + shift))
     elif transform == "intensify":
         shift = 1 if direction >= 0 else -1
@@ -250,8 +256,18 @@ def _realize_motive_fragment(
         last_event = events[-1]
         cursor = round(cursor + float(duration_value), 3)
 
+    reference_pitch = prev_pitch
+    if len(events) >= 2:
+        previous_event_pitch = _event_primary_pitch(events[-2])
+        if previous_event_pitch is not None:
+            reference_pitch = int(previous_event_pitch)
+
     if transform == "cadence" and last_event and harmony_tones:
-        stable_pitch = min(harmony_tones, key=lambda candidate: abs(candidate - prev_pitch))
+        stable_candidates = [
+            int(candidate) for candidate in harmony_tones
+            if abs(int(candidate) - int(reference_pitch)) <= max_leap
+        ] or [int(candidate) for candidate in harmony_tones]
+        stable_pitch = min(stable_candidates, key=lambda candidate: abs(candidate - int(prev_pitch)))
         last_event["pitches"] = [stable_pitch]
         prev_pitch = stable_pitch
         recent = (recent[:-1] + [stable_pitch])[-6:] if recent else [stable_pitch]
@@ -259,7 +275,7 @@ def _realize_motive_fragment(
         aligned_pitch = _align_target_pitch(
             pool,
             int(target_pitch),
-            prev_pitch,
+            int(reference_pitch),
             max_leap,
         )
         last_event["pitches"] = [aligned_pitch]
@@ -564,6 +580,14 @@ def _choose_line_opening_pitch(
             weight *= 0.82
         elif prev_distance <= 3:
             weight += 0.12
+        if len(pool) <= 5 and candidate_index in {0, len(pool) - 1}:
+            weight += 0.18
+        if len(pool) <= 5 and candidate_index >= target_index:
+            weight += 0.28
+        elif len(pool) >= 9 and register_distance >= 2:
+            weight += 0.16
+        if candidate_index != target_index:
+            weight += 0.08
 
         weights.append(max(0.2, weight))
 
@@ -1425,12 +1449,30 @@ def _apply_penultimate_ending(
     tonic_idx = sorted_scale.index(tonic_pc) if tonic_pc in sorted_scale else 0
     supertonic_pc = sorted_scale[(tonic_idx + 1) % len(sorted_scale)]
 
-    supertonic_candidates = [p for p in pool if p % 12 == supertonic_pc]
-    if not supertonic_candidates:
+    leading_tone_pc = sorted_scale[(tonic_idx - 1) % len(sorted_scale)]
+    final_tonic_candidates = [p for p in pool if p % 12 == tonic_pc]
+    target_tonic = (
+        min(final_tonic_candidates, key=lambda candidate: abs(candidate - prev_pitch))
+        if final_tonic_candidates
+        else prev_pitch
+    )
+    approach_candidates = sorted(
+        {
+            p for p in pool
+            if p % 12 in {supertonic_pc, leading_tone_pc}
+        }
+    )
+    if not approach_candidates:
         return
 
-    best_super = min(supertonic_candidates, key=lambda c: abs(c - prev_pitch))
-    last_pitched["pitches"] = [best_super]
+    best_approach = min(
+        approach_candidates,
+        key=lambda candidate: (
+            abs(candidate - target_tonic),
+            abs(candidate - prev_pitch),
+        ),
+    )
+    last_pitched["pitches"] = [best_approach]
 
     # Extend the last note to fill remaining time (simplify the tail).
     # Snap to nearest expressible duration to avoid floating-point artifacts

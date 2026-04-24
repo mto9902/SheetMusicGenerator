@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { formatGradeStageLabel as formatConfigStageLabel } from "@shared/options";
 import {
   formatDuration,
   formatHandPositionLabel,
@@ -61,7 +62,9 @@ export function LibraryPage() {
           </div>
           {presets.length ? (
             <div className="stack-list">
-              {presets.map((preset) => (
+              {presets.map((preset) => {
+                const stageLabel = formatConfigStageLabel(preset.config.gradeStage);
+                return (
                 <button
                   key={preset.id}
                   type="button"
@@ -73,11 +76,13 @@ export function LibraryPage() {
                     <span>
                       {formatModeLabel(preset.config.mode)} | {formatHandPositionLabel(preset.config.handPosition)} |
                       {" "}Grade {preset.config.grade}
+                      {stageLabel ? ` | ${stageLabel}` : ""}
                     </span>
                   </div>
                   <span className="list-item__meta">Reuse</span>
                 </button>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <p className="empty-copy">
@@ -92,7 +97,9 @@ export function LibraryPage() {
           </div>
           {recentExercises.length ? (
             <div className="stack-list">
-              {recentExercises.map((exercise) => (
+              {recentExercises.map((exercise) => {
+                const stageLabel = formatConfigStageLabel(exercise.config.gradeStage);
+                return (
                 <button
                   key={exercise.exerciseId}
                   type="button"
@@ -104,11 +111,13 @@ export function LibraryPage() {
                     <span>
                       {formatHandPositionLabel(exercise.config.handPosition)} | {exercise.config.timeSignature} |{" "}
                       {exercise.config.measureCount} bars
+                      {stageLabel ? ` | ${stageLabel}` : ""}
                     </span>
                   </div>
                   <span className="list-item__meta">{formatTimeAgo(exercise.createdAt)}</span>
                 </button>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <p className="empty-copy">Generated exercises will appear here after the first desktop run.</p>

@@ -10,8 +10,11 @@ import {
   DEFAULT_CONFIG,
   DEFAULT_SETTINGS,
   EXERCISE_OPTIONS,
+  formatGradeStageLabel,
   GRADE_PRESETS,
+  normalizeGradeStage,
   nextSeed,
+  visibleGradeStages,
 } from "@shared/options";
 import {
   EMPTY_PRESET_SHUFFLE,
@@ -25,6 +28,7 @@ import type {
   AppSettings,
   ExerciseConfig,
   ExerciseMode,
+  GradeStage,
   KeySignature,
   PresetShuffleState,
   ReadingFocus,
@@ -54,6 +58,7 @@ function toggleItem<T extends string>(items: T[], value: T): T[] {
 }
 
 function buildSummary(config: ExerciseConfig, presetMode: boolean, selectedTimes: TimeSignature[], selectedKeys: KeySignature[]) {
+  const stageLabel = formatGradeStageLabel(config.gradeStage);
   if (config.mode === "rhythm") {
     return {
       lead: `Desktop rhythm rep in ${config.timeSignature} with ${config.measureCount} bars at ${config.tempoPreset} tempo.`,
@@ -65,28 +70,37 @@ function buildSummary(config: ExerciseConfig, presetMode: boolean, selectedTimes
   if (presetMode) {
     const times = normalizeTimeSelections(config, selectedTimes).join(", ");
     const keys = normalizeKeySelections(config, selectedKeys).map(describeKey).join(", ");
+    const chips = [
+      `Grade ${config.grade}`,
+      `${recommendedPresetMeasureCount(config.grade)} bars`,
+      optionLabel(EXERCISE_OPTIONS.tempoPresets, config.tempoPreset),
+      `${config.handPosition} position`,
+    ];
+    if (stageLabel) {
+      chips.splice(1, 0, stageLabel);
+    }
     return {
       lead: `Guided piano rotation across ${times} and ${keys}.`,
       detail: "Desktop preset mode keeps the grade, tempo, and hand position stable while rotating meter, key, and texture choices for you.",
-      chips: [
-        `Grade ${config.grade}`,
-        `${recommendedPresetMeasureCount(config.grade)} bars`,
-        optionLabel(EXERCISE_OPTIONS.tempoPresets, config.tempoPreset),
-        `${config.handPosition} position`,
-      ],
+      chips,
     };
+  }
+
+  const chips = [
+    `Grade ${config.grade}`,
+    config.timeSignature,
+    `${config.measureCount} bars`,
+    optionLabel(EXERCISE_OPTIONS.tempoPresets, config.tempoPreset),
+    `${config.handPosition} position`,
+  ];
+  if (stageLabel) {
+    chips.splice(1, 0, stageLabel);
   }
 
   return {
     lead: `Custom ${describeKey(config.keySignature)} reading rep with ${config.rightHandMotion} motion.`,
     detail: "Custom setup lets you pin the exact musical shape, coordination style, and left-hand role before generating.",
-    chips: [
-      `Grade ${config.grade}`,
-      config.timeSignature,
-      `${config.measureCount} bars`,
-      optionLabel(EXERCISE_OPTIONS.tempoPresets, config.tempoPreset),
-      `${config.handPosition} position`,
-    ],
+    chips,
   };
 }
 
@@ -122,6 +136,39 @@ export function CreatePage() {
       ),
     [config.grade],
   );
+  const stageOptions = useMemo(() => visibleGradeStages(config.mode, config.grade), [config.grade, config.mode]);
+  const isGradeOneStage = config.mode === "piano" && config.grade === 1;
+  const rightHandMotionOptions = useMemo(() => {
+    if (config.mode !== "piano") {
+      return [];
+    }
+    if (config.gradeStage === "g1-pocket") {
+      return EXERCISE_OPTIONS.rightHandMotions
+        .filter((option) => option.value === "stepwise")
+        .map((option) => ({
+          value: option.value as ExerciseConfig["rightHandMotion"],
+          label: option.label,
+        }));
+    }
+    return EXERCISE_OPTIONS.rightHandMotions.map((option) => ({
+      value: option.value as ExerciseConfig["rightHandMotion"],
+      label: option.label,
+    }));
+  }, [config.gradeStage, config.mode]);
+  const leftHandPatternOptions = useMemo(() => {
+    const allowed =
+      config.mode === "piano" && config.grade === 1
+        ? config.gradeStage === "g1-pocket"
+          ? new Set(["held", "repeated"])
+          : new Set(["held", "repeated", "support-bass"])
+        : null;
+    return EXERCISE_OPTIONS.leftHandPatterns
+      .filter((option) => (allowed ? allowed.has(option.value) : true))
+      .map((option) => ({
+        value: option.value as ExerciseConfig["leftHandPattern"],
+        label: option.label,
+      }));
+  }, [config.grade, config.gradeStage, config.mode]);
 
   const summary = useMemo(
     () => buildSummary(config, presetMode, selectedTimeSignatures, selectedKeySignatures),
@@ -221,6 +268,11 @@ export function CreatePage() {
     const normalized = { ...next };
     const gradeMeta =
       GRADE_PRESETS.find((preset) => preset.grade === normalized.grade) ?? GRADE_PRESETS[0];
+    normalized.gradeStage = normalizeGradeStage(
+      normalized.mode,
+      normalized.grade,
+      normalized.gradeStage,
+    );
 
     if (normalized.measureCount > gradeMeta.piano.maxBars) {
       normalized.measureCount = gradeMeta.piano.maxBars;
@@ -232,6 +284,21 @@ export function CreatePage() {
 
     if (normalized.mode === "rhythm" || normalized.grade < 4) {
       normalized.allowAccidentals = false;
+    }
+    if (normalized.mode !== "piano") {
+      normalized.gradeStage = undefined;
+    }
+    if (normalized.mode === "piano" && normalized.grade === 1) {
+      const allowedLeftPatterns =
+        normalized.gradeStage === "g1-pocket"
+          ? new Set(["held", "repeated"])
+          : new Set(["held", "repeated", "support-bass"]);
+      if (normalized.gradeStage === "g1-pocket") {
+        normalized.rightHandMotion = "stepwise";
+      }
+      if (!allowedLeftPatterns.has(normalized.leftHandPattern)) {
+        normalized.leftHandPattern = "repeated";
+      }
     }
 
     const availableKeys = EXERCISE_OPTIONS.keySignatures.filter(
@@ -281,6 +348,7 @@ export function CreatePage() {
         keySignature: mode === "piano" ? config.keySignature : "C",
         handPosition: config.handPosition,
         handActivity: config.handActivity,
+        gradeStage: config.gradeStage,
         coordinationStyle: config.coordinationStyle,
         readingFocus: config.readingFocus,
         rightHandMotion: config.rightHandMotion,
@@ -419,6 +487,20 @@ export function CreatePage() {
               value={config.grade}
               onChange={(value) => updateConfig({ grade: Number(value) })}
             />
+
+            {isGradeOneStage ? (
+              <ChoicePills
+                label="Grade 1 stage"
+                hint="Move from exact pocket reading into broader staff coverage without changing the named hand position."
+                options={stageOptions.map((stage) => ({
+                  value: stage.value as GradeStage,
+                  label: stage.label,
+                  hint: stage.hint,
+                }))}
+                value={config.gradeStage ?? "g1-extend"}
+                onChange={(value) => updateConfig({ gradeStage: value as GradeStage })}
+              />
+            ) : null}
 
             {config.mode === "piano" ? (
               <ChoicePills
@@ -623,10 +705,7 @@ export function CreatePage() {
 
                   <ChoicePills
                     label="Right-hand motion"
-                    options={EXERCISE_OPTIONS.rightHandMotions.map((option) => ({
-                      value: option.value as ExerciseConfig["rightHandMotion"],
-                      label: option.label,
-                    }))}
+                    options={rightHandMotionOptions}
                     value={config.rightHandMotion}
                     onChange={(value) =>
                       updateConfig({
@@ -639,10 +718,7 @@ export function CreatePage() {
 
               <ChoicePills
                 label="Left-hand pattern"
-                options={EXERCISE_OPTIONS.leftHandPatterns.map((option) => ({
-                  value: option.value as ExerciseConfig["leftHandPattern"],
-                  label: option.label,
-                }))}
+                options={leftHandPatternOptions}
                 value={config.leftHandPattern}
                 onChange={(value) =>
                   updateConfig({

@@ -26,6 +26,10 @@ POSITION_LABELS = {
     item["value"]: item["label"] for item in EXERCISE_OPTIONS["handPositions"]
 }
 
+GRADE_STAGE_LABELS = {
+    item["value"]: item["label"] for item in EXERCISE_OPTIONS.get("gradeStages", [])
+}
+
 HAND_ACTIVITY_LABELS = {
     item["value"]: item["label"] for item in EXERCISE_OPTIONS["handActivities"]
 }
@@ -112,6 +116,64 @@ HAND_POSITION_LIMITS_BY_GRADE = {
     4: {"rh": (52, 81), "lh": (36, 57)},
     5: {"rh": (48, 84), "lh": (33, 60)},
 }
+
+GRADE_ONE_STAGE_SPECS = {
+    "g1-pocket": {
+        "rh": {"below_steps": 0, "above_steps": 4},
+        "lh": {"below_steps": 0, "above_steps": 4},
+        "max_leap": 2,
+        "allow_intervals": ("2nd",),
+        "allowed_left_families": ("held", "repeated"),
+    },
+    "g1-extend": {
+        "rh": {"below_steps": 0, "above_steps": 6},
+        "lh": {"below_steps": 2, "above_steps": 4},
+        "max_leap": 4,
+        "allow_intervals": ("2nd", "3rd"),
+        "allowed_left_families": ("held", "repeated", "support-bass"),
+    },
+    "g1-staff": {
+        "rh": {"below_steps": 1, "above_steps": 9},
+        "lh": {"below_steps": 5, "above_steps": 4},
+        "max_leap": 4,
+        "allow_intervals": ("2nd", "3rd"),
+        "allowed_left_families": ("held", "repeated", "support-bass"),
+    },
+}
+
+
+def normalize_grade_stage(
+    grade: int,
+    mode: str,
+    grade_stage: str | None,
+) -> str | None:
+    if mode != "piano" or grade != 1:
+        return None
+    if grade_stage in GRADE_ONE_STAGE_SPECS:
+        return grade_stage
+    return "g1-extend"
+
+
+def grade_one_stage_spec(grade_stage: str | None) -> dict[str, object] | None:
+    normalized = normalize_grade_stage(1, "piano", grade_stage)
+    if normalized is None:
+        return None
+    return GRADE_ONE_STAGE_SPECS[normalized]
+
+
+def request_grade_stage(request: dict[str, object]) -> str | None:
+    return normalize_grade_stage(
+        int(request.get("grade", 1)),
+        str(request.get("mode", "piano")),
+        str(request.get("gradeStage")) if request.get("gradeStage") else None,
+    )
+
+
+def request_max_leap(request: dict[str, object], default_max_leap: int) -> int:
+    stage_spec = grade_one_stage_spec(request_grade_stage(request))
+    if stage_spec is None:
+        return default_max_leap
+    return min(default_max_leap, int(stage_spec.get("max_leap", default_max_leap)))
 
 
 def hand_position_limits_for_grade(hand: str, grade: int) -> tuple[int, int]:

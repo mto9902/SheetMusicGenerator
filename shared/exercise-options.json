@@ -10,6 +10,11 @@
     { "value": 4, "label": "Grade 4", "subLabel": "ABRSM Grade 4" },
     { "value": 5, "label": "Grade 5", "subLabel": "ABRSM Grade 5" }
   ],
+  "gradeStages": [
+    { "value": "g1-pocket", "label": "1A Pocket", "grade": 1, "hint": "Exact five-note pocket" },
+    { "value": "g1-extend", "label": "1B Extend", "grade": 1, "hint": "Early reach beyond the pocket" },
+    { "value": "g1-staff", "label": "1C Staff", "grade": 1, "hint": "Broad beginner staff coverage" }
+  ],
   "timeSignatures": ["2/4", "3/4", "4/4", "6/8"],
   "measureCounts": [4, 8, 12],
   "tempoPresets": [
@@ -72,6 +77,7 @@
   "defaultConfig": {
     "mode": "piano",
     "grade": 1,
+    "gradeStage": "g1-extend",
     "timeSignature": "4/4",
     "measureCount": 4,
     "tempoPreset": "medium",

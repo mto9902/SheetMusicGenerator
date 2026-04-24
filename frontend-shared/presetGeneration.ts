@@ -398,6 +398,7 @@ export function resolvePresetConfigForRun(
     requestConfig: {
       ...configForMode("piano"),
       grade: config.grade,
+      gradeStage: config.gradeStage,
       measureCount: nextMeasureCount,
       tempoPreset: config.tempoPreset,
       timeSignature: timeDraw.value,
@@ -406,7 +407,10 @@ export function resolvePresetConfigForRun(
       handActivity: "both" as ExerciseConfig["handActivity"],
       coordinationStyle: nextCoordinationStyle,
       readingFocus: nextReadingFocus,
-      rightHandMotion: nextRightHandMotion,
+      rightHandMotion:
+        config.grade === 1 && config.gradeStage === "g1-pocket"
+          ? "stepwise"
+          : nextRightHandMotion,
       leftHandPattern: nextLeftHandPattern,
       allowRests: config.allowRests,
       allowAccidentals: config.allowAccidentals,

@@ -6,6 +6,7 @@ import random
 from music21 import key, pitch as m21pitch
 
 from ..config import (
+    grade_one_stage_spec,
     KEY_TONIC_PITCH_CLASS,
     hand_position_limits_for_grade,
     is_minor_key,
@@ -95,10 +96,30 @@ def _position_pitches_from_root(
     *,
     hand: str | None = None,
     grade: int | None = None,
+    grade_stage: str | None = None,
 ) -> list[int]:
     pitch_classes = _key_pitch_classes(key_signature)
     if hand is not None and grade is not None:
         lower_limit, upper_limit = hand_position_limits_for_grade(hand, grade)
+
+        if grade == 1:
+            stage_spec = grade_one_stage_spec(grade_stage)
+            if stage_spec is not None:
+                diatonic_pool = [
+                    midi for midi in range(lower_limit, upper_limit + 1)
+                    if midi % 12 in pitch_classes
+                ]
+                if diatonic_pool:
+                    root_index = min(
+                        range(len(diatonic_pool)),
+                        key=lambda index: abs(diatonic_pool[index] - root),
+                    )
+                    hand_spec = stage_spec.get(hand, {})
+                    below_steps = int(hand_spec.get("below_steps", 0))
+                    above_steps = int(hand_spec.get("above_steps", 4))
+                    start = max(0, root_index - below_steps)
+                    end = min(len(diatonic_pool) - 1, root_index + above_steps)
+                    return diatonic_pool[start : end + 1]
 
         # Grades 1-2 stay "in position", but allow a small fringe around that
         # core so RH can reach above the five-finger top note and LH can dip
@@ -139,3 +160,48 @@ def _shift_root(current_root: int, hand: str, grade: int, rng: random.Random) ->
     lower, upper = hand_position_limits_for_grade(hand, grade)
     next_root = current_root + rng.choice([-2, -1, 1, 2])
     return max(lower, min(upper, next_root))
+
+
+def _position_stage_zones(
+    root: int,
+    key_signature: str,
+    *,
+    hand: str,
+    grade: int,
+    grade_stage: str | None,
+) -> dict[str, list[int]]:
+    lower_limit, upper_limit = hand_position_limits_for_grade(hand, grade)
+    pitch_classes = _key_pitch_classes(key_signature)
+    diatonic_pool = [
+        midi for midi in range(lower_limit, upper_limit + 1)
+        if midi % 12 in pitch_classes
+    ]
+    if not diatonic_pool:
+        return {"window": [], "pocket": [], "lower_extension": [], "upper_extension": []}
+
+    root_index = min(
+        range(len(diatonic_pool)),
+        key=lambda index: abs(diatonic_pool[index] - root),
+    )
+    pocket_end = min(len(diatonic_pool), root_index + 5)
+    pocket = diatonic_pool[root_index:pocket_end]
+
+    stage_spec = grade_one_stage_spec(grade_stage)
+    if stage_spec is None:
+        window = pocket
+    else:
+        hand_spec = stage_spec.get(hand, {})
+        start = max(0, root_index - int(hand_spec.get("below_steps", 0)))
+        end = min(len(diatonic_pool), root_index + int(hand_spec.get("above_steps", 4)) + 1)
+        window = diatonic_pool[start:end]
+
+    pocket_set = set(pocket)
+    lower_extension = [pitch for pitch in window if pocket and pitch < pocket[0]]
+    upper_extension = [pitch for pitch in window if pocket and pitch > pocket[-1]]
+    return {
+        "window": window,
+        "pocket": pocket,
+        "lower_extension": lower_extension,
+        "upper_extension": upper_extension,
+        "pocket_set": list(pocket_set),
+    }

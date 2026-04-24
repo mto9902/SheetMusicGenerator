@@ -6,9 +6,11 @@ import random
 from typing import Any
 
 from ..config import (
+    grade_one_stage_spec,
     HAND_POSITION_ROOTS,
     HARMONY_INTERVALS,
     KEY_TONIC_PITCH_CLASS,
+    request_grade_stage,
 )
 from ._helpers import _measure_total, _pulse_value
 from ._pitch import _key_pitch_classes, _position_pitches_from_root
@@ -589,6 +591,7 @@ def _weights_for_hand(hand: str, preset: dict[str, Any], request: dict[str, Any]
         "restChance": float(p.get("rightRestChance", 0.05)),
     }
     if hand == "rh":
+        grade_stage = request_grade_stage(request)
         motion = str(request.get("rightHandMotion", "mixed"))
         # These user-visible knobs need to *actually* shape output, not just
         # nudge it — previously a ±0.14 step-weight delta was indistinguishable
@@ -613,6 +616,17 @@ def _weights_for_hand(hand: str, preset: dict[str, Any], request: dict[str, Any]
         elif motion == "mixed":
             base["stepWeight"] = 0.70
             base["rangeSigma"] = min(10.0, base["rangeSigma"] + 0.2)
+        if int(request.get("grade", 1)) == 1:
+            stage_spec = grade_one_stage_spec(grade_stage)
+            if stage_spec is not None:
+                allowed_intervals = list(stage_spec.get("allow_intervals", ("2nd", "3rd")))
+                base["allowIntervals"] = allowed_intervals
+                if grade_stage == "g1-pocket":
+                    base["stepWeight"] = 0.98
+                    base["rangeSigma"] = min(base["rangeSigma"], 1.9)
+                else:
+                    base["stepWeight"] = max(base["stepWeight"], 0.82)
+                    base["rangeSigma"] = min(base["rangeSigma"], 3.6 if grade_stage == "g1-extend" else 4.4)
     if hand == "lh":
         # LH anchors harmony more, steps a bit more
         base["chordToneWeight"] = base["chordToneWeight"] * 1.4
@@ -626,6 +640,10 @@ def _preferred_left_families(
     request: dict[str, Any],
     available_families: list[str],
 ) -> list[str]:
+    stage_spec = grade_one_stage_spec(request_grade_stage(request))
+    if stage_spec is not None:
+        allowed_set = set(stage_spec.get("allowed_left_families", ()))
+        available_families = [family for family in available_families if family in allowed_set]
     from ._planning import _LEFT_PATTERN_FAMILY_PREFERENCES
     preferred_pattern = str(request.get("leftHandPattern", "held"))
     available_set = set(available_families)
