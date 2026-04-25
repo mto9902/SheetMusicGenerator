@@ -3,53 +3,53 @@ import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { API_BASE } from "@/lib/api";
 import { CreatePage } from "@/pages/CreatePage";
 import { ExercisePage } from "@/pages/ExercisePage";
-import { HomePage } from "@/pages/HomePage";
 import { LibraryPage } from "@/pages/LibraryPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 
 const navItems = [
-  { to: "/", label: "Home", detail: "Dashboard and recent work" },
-  { to: "/create", label: "Create", detail: "Generate a new reading rep" },
-  { to: "/library", label: "Library", detail: "Presets, sheets, and sessions" },
-  { to: "/settings", label: "Settings", detail: "Desktop defaults" },
+  { to: "/", label: "Compose" },
+  { to: "/library", label: "History" },
+  { to: "/settings", label: "Settings" },
 ];
 
 export default function App() {
+  const apiHost = API_BASE.replace(/^https?:\/\//, "");
+
   return (
-    <div className="shell">
-      <aside className="shell__sidebar">
-        <div className="shell__brand">
-          <p className="eyebrow">SheetGenerator</p>
-          <h1>Desktop-first sight reading</h1>
-          <p>
-            Browser release surface now, Tauri-ready structure later. The Python generator stays
-            remote behind the same API contract.
-          </p>
+    <div className="app-shell">
+      <header className="studio-topbar">
+        <div className="studio-topbar__brand" aria-label="SheetGenerator desktop">
+          <span className="studio-topbar__mark">SG</span>
+          <div>
+            <strong>Caprice</strong>
+            <span>Sight-reading composer</span>
+          </div>
         </div>
 
-        <nav className="shell__nav">
+        <nav className="studio-topbar__nav" aria-label="Primary navigation">
           {navItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
               end={item.to === "/"}
-              className={({ isActive }) => `shell__link ${isActive ? "shell__link--active" : ""}`}
+              className={({ isActive }) =>
+                `studio-topbar__link ${isActive ? "studio-topbar__link--active" : ""}`
+              }
             >
-              <strong>{item.label}</strong>
-              <span>{item.detail}</span>
+              {item.label}
             </NavLink>
           ))}
         </nav>
 
-        <div className="shell__meta">
-          <span>Generator API</span>
-          <strong>{API_BASE}</strong>
+        <div className="studio-topbar__api" title={API_BASE}>
+          <span>API</span>
+          <strong>{apiHost}</strong>
         </div>
-      </aside>
+      </header>
 
-      <main className="shell__content">
+      <main className="app-shell__content">
         <Routes>
-          <Route path="/" element={<HomePage />} />
+          <Route path="/" element={<CreatePage />} />
           <Route path="/create" element={<CreatePage />} />
           <Route path="/library" element={<LibraryPage />} />
           <Route path="/settings" element={<SettingsPage />} />

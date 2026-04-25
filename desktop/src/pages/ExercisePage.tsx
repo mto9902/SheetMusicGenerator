@@ -6,6 +6,7 @@ import { generateExercise } from "@/lib/api";
 import { storage } from "@/storage";
 import {
   formatDuration,
+  formatHandActivityLabel,
   formatHandPositionLabel,
   formatModeLabel,
 } from "@shared/format";
@@ -40,6 +41,15 @@ function countBeats(timeSignature: string) {
   return Number(timeSignature.split("/")[0]) || 4;
 }
 
+function ProfileStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="profile-stat">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
 export function ExercisePage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -65,6 +75,21 @@ export function ExercisePage() {
   const stageLabel = exercise?.summary.stageLabel || formatConfigStageLabel(exercise?.config.gradeStage);
   const totalCountBeats = exercise ? countBeats(exercise.timeSignature) : 4;
   const pulseDots = useMemo(() => Array.from({ length: totalCountBeats }), [totalCountBeats]);
+
+  function clearAllTimers() {
+    if (countTimerRef.current) {
+      window.clearInterval(countTimerRef.current);
+      countTimerRef.current = null;
+    }
+    if (practiceTimerRef.current) {
+      window.clearInterval(practiceTimerRef.current);
+      practiceTimerRef.current = null;
+    }
+    if (pulseTimerRef.current) {
+      window.clearInterval(pulseTimerRef.current);
+      pulseTimerRef.current = null;
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -134,7 +159,6 @@ export function ExercisePage() {
       return;
     }
 
-    setPulseIndex(0);
     pulseTimerRef.current = window.setInterval(() => {
       setPulseIndex((current) => (current + 1) % totalCountBeats);
     }, beatMs(bpm));
@@ -146,21 +170,6 @@ export function ExercisePage() {
       }
     };
   }, [bpm, practiceStart, settings?.metronomeDefault, totalCountBeats]);
-
-  function clearAllTimers() {
-    if (countTimerRef.current) {
-      window.clearInterval(countTimerRef.current);
-      countTimerRef.current = null;
-    }
-    if (practiceTimerRef.current) {
-      window.clearInterval(practiceTimerRef.current);
-      practiceTimerRef.current = null;
-    }
-    if (pulseTimerRef.current) {
-      window.clearInterval(pulseTimerRef.current);
-      pulseTimerRef.current = null;
-    }
-  }
 
   function beginPracticeNow() {
     setPulseIndex(0);
@@ -205,7 +214,7 @@ export function ExercisePage() {
 
     const finishedAt = new Date().toISOString();
     await storage.savePracticeSession({
-      id: `session-${Date.now().toString(36)}`,
+      id: `session-${new Date(finishedAt).getTime().toString(36)}`,
       exerciseId: exercise.exerciseId,
       presetId: null,
       title: exercise.title,
@@ -315,174 +324,188 @@ export function ExercisePage() {
 
   if (loading) {
     return (
-      <div className="page">
-        <div className="card card--centered">
-          <p>Loading exercise...</p>
-        </div>
+      <div className="studio-empty">
+        <p>Loading score...</p>
       </div>
     );
   }
 
   if (!exercise || !settings) {
     return (
-      <div className="page">
-        <div className="card card--centered">
-          <h1 className="page__title">Exercise not found</h1>
-          <p className="empty-copy">
-            This score is not in local desktop history yet. Generate a fresh rep first.
-          </p>
-        </div>
+      <div className="studio-empty">
+        <h1>Exercise not found</h1>
+        <p>This score is not in local desktop history yet. Compose a fresh rep first.</p>
+        <button type="button" className="compose-button" onClick={() => navigate("/")}>
+          Back to Compose
+        </button>
       </div>
     );
   }
 
   return (
-    <div className="page">
-      <header className="page__header">
-        <div>
-          <p className="eyebrow">Exercise</p>
-          <h1 className="page__title">{exercise.title}</h1>
-          <p className="page__subtitle">
-            {formatModeLabel(exercise.config.mode)} | {exercise.timeSignature} | {exercise.measureCount} bars | Grade {exercise.grade}
-            {stageLabel ? ` | ${stageLabel}` : ""}
-          </p>
-        </div>
-        <div className="page__actions">
-          <button type="button" className="button button--ghost" onClick={() => navigate("/settings")}>
-            Settings
-          </button>
-          <button type="button" className="button button--ghost" onClick={() => navigate("/library")}>
-            Library
-          </button>
-        </div>
-      </header>
-
-      {notice ? <div className="notice">{notice}</div> : null}
-
-      <div className="content-grid content-grid--wide">
-        <section className="stack">
-          <div className="card">
-            <NotationPanel svg={exercise.svg} scale={settings.notationScale} />
+    <div className="exercise-workbench">
+      <aside className="studio-rail studio-rail--left" aria-label="Score details">
+        <section className="studio-card">
+          <div className="studio-card__heading">
+            <h2>Composition</h2>
           </div>
+          <ProfileStat label="Time" value={exercise.timeSignature} />
+          <ProfileStat label="Key" value={exercise.config.keySignature} />
+          <ProfileStat label="Measures" value={`${exercise.measureCount}`} />
+          <ProfileStat label="Grade" value={`${exercise.grade}${stageLabel ? ` - ${stageLabel}` : ""}`} />
+        </section>
 
-          <div className="card">
-            <div className="card__heading">
-              <h2>Reading profile</h2>
-            </div>
-            <div className="stat-grid">
-              <div className="stat-card">
-                <span>Phrase shape</span>
-                <strong>{exercise.summary.phraseShapeLabel}</strong>
-              </div>
-              <div className="stat-card">
-                <span>Cadence</span>
-                <strong>{exercise.summary.cadenceLabel}</strong>
-              </div>
-              <div className="stat-card">
-                <span>Harmony focus</span>
-                <strong>{exercise.summary.harmonyFocus[0] || exercise.summary.handPositionLabel}</strong>
-              </div>
-              <div className="stat-card">
-                <span>Technique focus</span>
-                <strong>
-                  {exercise.summary.techniqueFocus[0] ||
-                    exercise.summary.rhythmFocus[0] ||
-                    exercise.summary.coordinationLabel}
-                </strong>
-              </div>
-            </div>
-            <p className="detail-paragraph">
-              {exercise.summary.handPositionLabel}
+        <section className="studio-card">
+          <div className="studio-card__heading">
+            <h2>Character</h2>
+          </div>
+          <ProfileStat label="Phrase shape" value={exercise.summary.phraseShapeLabel} />
+          <ProfileStat label="Cadence" value={exercise.summary.cadenceLabel} />
+          <ProfileStat label="Reading focus" value={exercise.summary.rhythmFocus.join(", ")} />
+        </section>
+
+        <section className="studio-card">
+          <div className="studio-card__heading">
+            <h2>Structure</h2>
+          </div>
+          <ProfileStat label="Hand position" value={formatHandPositionLabel(exercise.config.handPosition)} />
+          <ProfileStat label="Hand mix" value={formatHandActivityLabel(exercise.config.handActivity)} />
+          <ProfileStat label="Seed" value={exercise.summary.seedLabel} />
+        </section>
+      </aside>
+
+      <section className="score-stage" aria-label="Generated score">
+        <header className="score-stage__header">
+          <div>
+            <p className="eyebrow">Score</p>
+            <h1>{exercise.title}</h1>
+            <p>
+              {formatModeLabel(exercise.config.mode)} | {exercise.timeSignature} |{" "}
+              {exercise.measureCount} bars | Grade {exercise.grade}
               {stageLabel ? ` | ${stageLabel}` : ""}
-              {" | "}
-              {exercise.summary.coordinationLabel} |{" "}
-              {exercise.summary.rhythmFocus.join(", ")}
             </p>
+          </div>
+          <div className="score-stage__actions">
+            <button type="button" className="button button--ghost" onClick={() => navigate("/")}>
+              Compose
+            </button>
+            <button type="button" className="button button--ghost" onClick={() => navigate("/library")}>
+              History
+            </button>
+          </div>
+        </header>
+
+        {notice ? <div className="notice">{notice}</div> : null}
+
+        <div className="score-paper">
+          <NotationPanel svg={exercise.svg} scale={settings.notationScale} />
+        </div>
+      </section>
+
+      <aside className="studio-rail studio-rail--right" aria-label="Playback and practice">
+        <section className="studio-card">
+          <div className="studio-card__heading">
+            <h2>Instrument</h2>
+          </div>
+          <ProfileStat label="Patch" value={formatModeLabel(exercise.config.mode)} />
+        </section>
+
+        <section className="studio-card">
+          <div className="studio-card__heading">
+            <h2>Mix</h2>
+          </div>
+          <div className="mix-dial">
+            <span>{exercise.config.handActivity === "both" ? "70%" : "50%"}</span>
+          </div>
+          <ProfileStat label="Hands" value={formatHandActivityLabel(exercise.config.handActivity)} />
+        </section>
+
+        <section className="studio-card">
+          <div className="studio-card__heading">
+            <h2>Tempo</h2>
+          </div>
+          <div className="tempo-stepper tempo-stepper--readonly">
+            <strong>{bpm}</strong>
           </div>
         </section>
 
-        <aside className="stack stack--sticky">
-          <section className="card card--accent">
-            <p className="eyebrow eyebrow--light">Playback & actions</p>
-            <audio className="audio-player" controls preload="metadata" src={exercise.audioUrl}>
-              Your browser cannot play this preview.
-            </audio>
-            <div className="button-row">
-              <button type="button" className="button button--light" onClick={regenerateExercise} disabled={regenerating}>
-                {regenerating ? "Regenerating..." : "Regenerate"}
-              </button>
-              <button type="button" className="button button--light" onClick={() => setPresetEditorOpen(true)}>
-                Save preset
-              </button>
-            </div>
-          </section>
+        <section className="studio-card">
+          <div className="studio-card__heading">
+            <h2>Playback</h2>
+          </div>
+          <audio className="audio-player" controls preload="metadata" src={exercise.audioUrl}>
+            Your browser cannot play this preview.
+          </audio>
+          <div className="button-row">
+            <button type="button" className="button button--primary" onClick={regenerateExercise} disabled={regenerating}>
+              {regenerating ? "Regenerating..." : "Regenerate"}
+            </button>
+            <button type="button" className="button button--ghost" onClick={() => setPresetEditorOpen(true)}>
+              Save preset
+            </button>
+          </div>
+        </section>
 
-          <section className="card">
-            <div className="card__heading">
-              <h2>Practice status</h2>
-            </div>
-            {countingIn ? (
-              <>
-                <p className="meter-title">Count-in</p>
-                <strong className="count-in-number">{countBeat}</strong>
-              </>
-            ) : practiceStart ? (
-              <>
-                <p className="meter-title">Practice running</p>
-                <strong className="count-in-number">{formatDuration(practiceSeconds)}</strong>
-                {settings.metronomeDefault ? (
-                  <div className="pulse-row">
-                    {pulseDots.map((_, index) => (
-                      <span
-                        key={index}
-                        className={`pulse-dot ${index === pulseIndex ? "pulse-dot--active" : ""}`}
-                      />
-                    ))}
-                  </div>
-                ) : null}
-                <button type="button" className="button button--primary" onClick={() => setRatingOpen(true)}>
-                  Finish session
-                </button>
-              </>
-            ) : (
-              <>
-                <p className="detail-paragraph">
-                  Start a practice run to log time, use the count-in, and keep the desktop history meaningful.
-                </p>
-                <button type="button" className="button button--primary" onClick={startPractice}>
-                  Start practice
-                </button>
-              </>
-            )}
-          </section>
-
-          <section className="card">
-            <div className="card__heading">
-              <h2>Session defaults</h2>
-            </div>
-            <div className="summary-list">
-              <div className="summary-row">
-                <span>Notation scale</span>
-                <strong>{settings.notationScale.toFixed(2)}x</strong>
-              </div>
-              <div className="summary-row">
-                <span>Hand position</span>
-                <strong>{formatHandPositionLabel(exercise.config.handPosition)}</strong>
-              </div>
-              {stageLabel ? (
-                <div className="summary-row">
-                  <span>Grade stage</span>
-                  <strong>{stageLabel}</strong>
+        <section className="studio-card">
+          <div className="studio-card__heading">
+            <h2>Practice</h2>
+          </div>
+          {countingIn ? (
+            <>
+              <p className="meter-title">Count-in</p>
+              <strong className="count-in-number">{countBeat}</strong>
+            </>
+          ) : practiceStart ? (
+            <>
+              <p className="meter-title">Practice running</p>
+              <strong className="count-in-number">{formatDuration(practiceSeconds)}</strong>
+              {settings.metronomeDefault ? (
+                <div className="pulse-row">
+                  {pulseDots.map((_, index) => (
+                    <span
+                      key={index}
+                      className={`pulse-dot ${index === pulseIndex ? "pulse-dot--active" : ""}`}
+                    />
+                  ))}
                 </div>
               ) : null}
-              <div className="summary-row">
-                <span>Seed</span>
-                <strong>{exercise.summary.seedLabel}</strong>
-              </div>
-            </div>
-          </section>
-        </aside>
-      </div>
+              <button type="button" className="button button--primary" onClick={() => setRatingOpen(true)}>
+                Finish session
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="detail-paragraph">
+                Start a timed practice run with count-in and optional pulse.
+              </p>
+              <button type="button" className="button button--primary" onClick={startPractice}>
+                Start practice
+              </button>
+            </>
+          )}
+        </section>
+
+        <section className="studio-card">
+          <div className="studio-card__heading">
+            <h2>Keyboard</h2>
+          </div>
+          <div className="keyboard-preview" aria-label={`${exercise.config.handPosition} position`}>
+            {["C", "D", "E", "F", "G", "A", "B"].map((note) => (
+              <span
+                key={note}
+                className={`white-key ${note === exercise.config.handPosition ? "white-key--active" : ""}`}
+              >
+                {note}
+              </span>
+            ))}
+            <span className="black-key black-key--1" />
+            <span className="black-key black-key--2" />
+            <span className="black-key black-key--4" />
+            <span className="black-key black-key--5" />
+            <span className="black-key black-key--6" />
+          </div>
+        </section>
+      </aside>
 
       {presetEditorOpen ? (
         <div className="modal">
@@ -494,7 +517,7 @@ export function ExercisePage() {
               </button>
             </div>
             <p className="detail-paragraph">
-              Give this desktop setup a reusable name so it appears in the library.
+              Give this setup a reusable name so it appears in history.
             </p>
             <input
               className="text-input"
@@ -521,7 +544,7 @@ export function ExercisePage() {
               </button>
             </div>
             <p className="detail-paragraph">
-              Save the session with a quick self-rating to keep the desktop history useful.
+              Save the session with a quick self-rating to keep history useful.
             </p>
             <div className="rating-grid">
               {[1, 2, 3, 4, 5].map((value) => (
