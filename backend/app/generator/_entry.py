@@ -143,6 +143,7 @@ def build_exercise(request: dict[str, Any]) -> dict[str, Any]:
         "measureCount": request["measureCount"],
         "timeSignature": request["timeSignature"],
         "grade": request["grade"],
+        "noteEvents": events,
         "summary": {
             "bpm": bpm,
             "handPositionLabel": POSITION_LABELS[request["handPosition"]],

@@ -90,6 +90,30 @@ class ExerciseDebug(BaseModel):
     qualityGate: dict[str, Any] | None = None
 
 
+class NoteEvent(BaseModel):
+    pitches: list[int]
+    quarterLength: float
+    offset: float
+    hand: str
+    measure: int
+    isRest: bool = False
+    dynamic: str | None = None
+    articulation: str | None = None
+    eventId: str | None = None
+    tieType: str | None = None
+    slurId: str | None = None
+    slurRole: str | None = None
+    hairpinStart: dict[str, str] | None = None
+    hairpinStopIds: list[str] | None = None
+    tuplet: dict[str, int] | None = None
+    dynamicScalar: float | None = None
+    durationScale: float | None = None
+    reattack: float | None = None
+    touch: float | None = None
+    technique: str | None = None
+    fermata: bool = False
+
+
 class ExerciseResponse(BaseModel):
     exerciseId: str
     seed: str
@@ -102,4 +126,5 @@ class ExerciseResponse(BaseModel):
     timeSignature: TimeSignature
     grade: int
     summary: ExerciseSummary
+    noteEvents: list[NoteEvent]
     debug: ExerciseDebug | None = None

@@ -63,6 +63,30 @@ export type ExerciseGenerationContext = {
   presetShuffle: PresetShuffleState;
 };
 
+export type NoteEvent = {
+  pitches: number[];
+  quarterLength: number;
+  offset: number;
+  hand: string;
+  measure: number;
+  isRest?: boolean;
+  dynamic?: string | null;
+  articulation?: string | null;
+  eventId?: string | null;
+  tieType?: string | null;
+  slurId?: string | null;
+  slurRole?: string | null;
+  hairpinStart?: Record<string, string> | null;
+  hairpinStopIds?: string[] | null;
+  tuplet?: Record<string, number> | null;
+  dynamicScalar?: number | null;
+  durationScale?: number | null;
+  reattack?: number | null;
+  touch?: number | null;
+  technique?: string | null;
+  fermata?: boolean;
+};
+
 export type GeneratedExercise = {
   exerciseId: string;
   seed: string;
@@ -75,6 +99,7 @@ export type GeneratedExercise = {
   timeSignature: TimeSignature;
   grade: number;
   summary: ExerciseSummary;
+  noteEvents: NoteEvent[];
   debug?: ExerciseDebug | null;
   generationContext?: ExerciseGenerationContext | null;
 };

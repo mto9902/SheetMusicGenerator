@@ -25,9 +25,9 @@ type MultiChoicePillsProps<T extends PillValue> = SharedProps & {
 
 function renderCopy(label: string, hint?: string) {
   return (
-    <div className="field__header">
-      <h3 className="field__label">{label}</h3>
-      {hint ? <p className="field__hint">{hint}</p> : null}
+    <div className="mb-2.5">
+      <h3 className="text-sm font-semibold text-[#1C1C1E]">{label}</h3>
+      {hint ? <p className="text-xs text-[#8E8E93] mt-0.5">{hint}</p> : null}
     </div>
   );
 }
@@ -40,20 +40,20 @@ export function ChoicePills<T extends PillValue>({
   onChange,
 }: ChoicePillsProps<T>) {
   return (
-    <section className="field">
+    <section className="mb-5">
       {renderCopy(label, hint)}
-      <div className="pill-grid">
+      <div className="flex flex-wrap gap-2">
         {options.map((option) => {
           const isActive = option.value === value;
           return (
             <button
               key={String(option.value)}
               type="button"
-              className={`pill ${isActive ? "pill--active" : ""}`}
+              className={`pill ${isActive ? 'pill--active' : ''}`}
               onClick={() => onChange(option.value)}
             >
-              <span>{option.label}</span>
-              {option.hint ? <small>{option.hint}</small> : null}
+              <span className="text-sm font-medium">{option.label}</span>
+              {option.hint ? <small className="text-[11px]">{option.hint}</small> : null}
             </button>
           );
         })}
@@ -70,20 +70,20 @@ export function MultiChoicePills<T extends PillValue>({
   onToggle,
 }: MultiChoicePillsProps<T>) {
   return (
-    <section className="field">
+    <section className="mb-5">
       {renderCopy(label, hint)}
-      <div className="pill-grid">
+      <div className="flex flex-wrap gap-2">
         {options.map((option) => {
           const isActive = values.includes(option.value);
           return (
             <button
               key={String(option.value)}
               type="button"
-              className={`pill ${isActive ? "pill--active" : ""}`}
+              className={`pill ${isActive ? 'pill--active' : ''}`}
               onClick={() => onToggle(option.value)}
             >
-              <span>{option.label}</span>
-              {option.hint ? <small>{option.hint}</small> : null}
+              <span className="text-sm font-medium">{option.label}</span>
+              {option.hint ? <small className="text-[11px]">{option.hint}</small> : null}
             </button>
           );
         })}
