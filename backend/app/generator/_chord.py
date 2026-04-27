@@ -226,19 +226,76 @@ def _second_partner_candidates(top_pitch: int, key_signature: str) -> list[int]:
     return candidates
 
 
+def _consonant_partner_candidates(top_pitch: int, key_signature: str) -> list[int]:
+    """Diatonic 3rds (and 6ths) below the melody note.
+
+    Thirds and sixths are the canonical "duet partner" intervals — they sound
+    melodic, not clashy.  We prefer them over seconds for low-grade pieces
+    where stacked seconds read as wrong notes rather than colour.
+    """
+    candidates: list[int] = []
+    key_pcs = _key_pitch_classes(key_signature)
+    # Diatonic 3rd below: -3 or -4 semitones depending on scale degree.
+    # Diatonic 6th below: -8 or -9 semitones.
+    for delta in (-3, -4, -8, -9):
+        candidate = top_pitch + delta
+        if candidate % 12 not in key_pcs:
+            continue
+        category = _interval_category(abs(candidate - top_pitch))
+        if category not in {"3rd", "6th"}:
+            continue
+        candidates.append(candidate)
+    return candidates
+
+
 def _choose_second_partner(
     top_pitch: int,
     key_signature: str,
     harmony: str,
     measure_role: str,
     rng: random.Random,
+    *,
+    prefer_consonant: bool = True,
 ) -> int | None:
+    """Pick a harmony partner for an RH melody note.
+
+    By default returns a consonant 3rd or 6th below the melody — those sound
+    like a "duet line" rather than a clash.  Set ``prefer_consonant=False`` to
+    fall back on the original second-interval behaviour (used for grade 5+ as
+    an explicit colouristic effect).
+    """
+    if prefer_consonant:
+        candidates = _consonant_partner_candidates(top_pitch, key_signature)
+        if not candidates:
+            return None
+        chord_pcs = _chord_pitch_classes(key_signature, harmony)
+        best_partner: int | None = None
+        best_score = -999.0
+        for candidate in candidates:
+            score = 0.0
+            # Strongly prefer 3rds — closer voicing, classic duet sound.
+            if _interval_category(abs(candidate - top_pitch)) == "3rd":
+                score += 1.2
+            else:
+                score += 0.4  # 6ths are pleasant but more spread out.
+            if candidate % 12 in chord_pcs:
+                score += 0.7  # consonant + harmonic alignment
+            if candidate < top_pitch:
+                score += 0.5  # always below the lead note
+            if measure_role == "intensify":
+                score += 0.1
+            score += rng.random() * 0.15
+            if score > best_score:
+                best_score = score
+                best_partner = candidate
+        return best_partner
+
     candidates = _second_partner_candidates(top_pitch, key_signature)
     if not candidates:
         return None
 
     chord_pcs = _chord_pitch_classes(key_signature, harmony)
-    best_partner: int | None = None
+    best_partner = None
     best_score = -999.0
     for candidate in candidates:
         score = 0.0
@@ -266,12 +323,22 @@ def _apply_right_hand_seconds(
     rng: random.Random,
 ) -> list[dict[str, Any]]:
     grade = int(request.get("grade", 0))
-    if request.get("mode") != "piano" or grade not in {3, 4}:
+    # Production-quality default: grades 1-4 stay single-line melody. RH
+    # dyads/3rds appear only at grade 5 as a deliberate harmonic colour.
+    # SRF-style sight-reading material below grade 5 is single-voice.
+    if request.get("mode") != "piano" or grade < 5:
         return events
 
     piano = preset.get("piano", {})
-    base_chance = float(piano.get("rightSecondChance", 0.22 if grade == 3 else 0.32))
+    base_chance = float(piano.get("rightSecondChance", 0.18 if grade == 3 else 0.26 if grade == 4 else 0.32))
+    # Grade 3-4: harmonize melody notes with consonant 3rds/6ths instead of
+    # raw 2nds — stacked 2nds read as wrong notes in beginner/intermediate
+    # material.  Grade 5+ keeps the colouristic 2nd dyads as before.
+    prefer_consonant = grade < 5
     updated = [{**event, "pitches": list(event.get("pitches", []))} for event in events]
+
+    total_measure = _measure_total(request["timeSignature"])
+    pulse_value = _pulse_value(request["timeSignature"])
 
     phrase_candidates: dict[int, list[tuple[float, int, int]]] = {}
     for index, event in enumerate(updated):
@@ -282,20 +349,40 @@ def _apply_right_hand_seconds(
             continue
         if event.get("tuplet") or event.get("tieType"):
             continue
-        if float(event.get("_actualDur", event.get("quarterLength", 0.0))) < 0.5:
+        duration_value = float(event.get("_actualDur", event.get("quarterLength", 0.0)))
+        if duration_value < 0.5:
+            continue
+        # Sustained notes are the worst place for an added partner — long
+        # held dyads ring out and sound dissonant.  Skip anything ≥ 1.5 beats.
+        if duration_value >= pulse_value * 1.5:
             continue
         technique = str(event.get("technique", ""))
         if technique in {"block chord", "chordal texture", "triplet", "scale run", "scale figure"}:
             continue
-        measure_role = str(event.get("measureRole", "develop"))
-        if measure_role == "cadence":
+        # Shaped final-cadence and motif-anchor notes shouldn't get partnered.
+        if technique in {"final tonic", "final cadence", "motif"}:
             continue
-        if measure_role == "establish" and abs(float(event.get("offset", 0.0)) % _measure_total(request["timeSignature"])) < 0.001:
+        measure_role = str(event.get("measureRole", "develop"))
+        if measure_role in {"cadence", "establish"}:
+            # No dyads on cadence bars or opening establishment notes — those
+            # need to sing as single melodic gestures.
+            continue
+        local_offset = round(float(event.get("offset", 0.0)) % total_measure, 3)
+        # Skip the downbeat — partner notes belong on weak/passing positions
+        # so the melodic line stays primary.
+        if abs(local_offset) < 0.001:
             continue
 
         top_pitch = pitches[0]
         harmony = str(event.get("harmony", "I"))
-        partner = _choose_second_partner(top_pitch, request["keySignature"], harmony, measure_role, rng)
+        partner = _choose_second_partner(
+            top_pitch,
+            request["keySignature"],
+            harmony,
+            measure_role,
+            rng,
+            prefer_consonant=prefer_consonant,
+        )
         if partner is None:
             continue
 
@@ -403,7 +490,10 @@ def _apply_right_hand_harmonic_punctuations(
     rng: random.Random,
 ) -> list[dict[str, Any]]:
     grade = int(request.get("grade", 0))
-    if request.get("mode") != "piano" or grade < 4:
+    # Production-quality default: harmonic punctuations only at grade 5+. The
+    # melodic line stays single-voice in grades 1-4 to match SRF-grade
+    # sight-reading material.
+    if request.get("mode") != "piano" or grade < 5:
         return events
 
     total = _measure_total(request["timeSignature"])
@@ -424,6 +514,12 @@ def _apply_right_hand_harmonic_punctuations(
         duration_value = float(event.get("_actualDur", event.get("quarterLength", 0.0)))
         if duration_value < max(0.5, pulse * 0.5):
             continue
+        # Long sustained dyads/chords inside an otherwise single-line melody
+        # read as "broken" — they ring out and obscure the melodic line.
+        # Restrict punctuations to notes ≤ pulse (one beat) so they read as
+        # punctuation, not as a held chord.
+        if duration_value > pulse + 0.05:
+            continue
 
         technique = str(event.get("technique", ""))
         if technique in {
@@ -433,11 +529,14 @@ def _apply_right_hand_harmonic_punctuations(
             "scale run",
             "scale figure",
             "scale figure landing",
+            "final tonic",
+            "final cadence",
+            "motif",
         }:
             continue
 
         measure_role = str(event.get("measureRole", "develop"))
-        if measure_role == "cadence":
+        if measure_role in {"cadence", "establish"}:
             continue
 
         local_offset = round(float(event.get("offset", 0.0)) % total, 3)

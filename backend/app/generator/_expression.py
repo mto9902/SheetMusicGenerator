@@ -102,11 +102,24 @@ def _apply_ties(
     request: dict[str, Any],
     rng: random.Random,
 ) -> list[dict[str, Any]]:
-    if request["mode"] != "piano" or int(request["grade"]) < 2:
+    """Split events that cross a beat boundary into tied notes.
+
+    Production-quality restraint: ties are reserved for deliberate
+    syncopation (anticipation of a strong beat) or cadential anticipation —
+    never as decoration.  Most beginner/intermediate scores have at most 1-2
+    ties per piece; clutter from frequent ties is a strong "engine-generated"
+    tell.  Chord-stack events never get tied (they sustain visually anyway).
+    """
+    grade = int(request["grade"])
+    # Grade 1-3: no ties at all — the rhythmic vocabulary doesn't need them.
+    if request["mode"] != "piano" or grade < 4:
         return events
 
     total = _measure_total(request["timeSignature"])
     pulse = _pulse_value(request["timeSignature"])
+    measure_count = int(request.get("measureCount", 0)) or 1
+    # Hard cap on total ties per piece to prevent visual clutter.
+    max_ties_per_piece = 1 if measure_count <= 4 else 2
     tie_counter = 0
     output: list[dict[str, Any]] = []
 
@@ -116,8 +129,25 @@ def _apply_ties(
             output.append(event)
             continue
 
+        # Skip chord-stack events — sustained dyads/triads don't need ties to
+        # be visible, and they read as accidental clusters when split.
+        if len(event.get("pitches", [])) > 1:
+            output.append(event)
+            continue
+
+        # Skip already-shaped final-cadence/motif notes.
+        if str(event.get("technique", "")) in {"final tonic", "final cadence", "motif"}:
+            output.append(event)
+            continue
+
         duration_value = float(event.get("_actualDur", event["quarterLength"]))
-        if duration_value < max(0.75, pulse * 0.66):
+        # Ties only on notes ≥ 1.5 beats (genuinely sustaining)
+        if duration_value < pulse * 1.5:
+            output.append(event)
+            continue
+
+        # Already at the cap → no more ties.
+        if tie_counter >= max_ties_per_piece:
             output.append(event)
             continue
 
@@ -131,17 +161,16 @@ def _apply_ties(
         role = str(event.get("measureRole", "develop"))
 
         should_split = False
-        if crosses_boundary and not starts_on_pulse:
-            should_split = rng.random() < (0.22 if int(request["grade"]) >= 4 else 0.12)
-        elif crosses_boundary and role == "cadence" and duration_value >= pulse * 1.35:
+        # Only two scenarios trigger ties:
+        # (1) Cadential anticipation — a long note approaches the cadence
+        #     across a beat boundary.
+        # (2) Genuine syncopation — note starts off the beat and sustains.
+        if crosses_boundary and role == "cadence" and duration_value >= pulse * 2.0:
             should_split = True
-        elif (
-            crosses_boundary
-            and len(event.get("pitches", [])) > 1
-            and int(request["grade"]) >= 4
-            and rng.random() < 0.08
-        ):
-            should_split = True
+        elif crosses_boundary and not starts_on_pulse and duration_value >= pulse * 1.75:
+            # Syncopation: note starts off-beat and is genuinely long. Use a
+            # low probability so it stays a deliberate gesture.
+            should_split = rng.random() < 0.10
 
         if not should_split:
             output.append(event)
@@ -149,7 +178,7 @@ def _apply_ties(
 
         first_duration = round(next_boundary - local_start, 3)
         second_duration = round(local_end - next_boundary, 3)
-        if first_duration < 0.25 or second_duration < 0.25:
+        if first_duration < pulse * 0.5 or second_duration < pulse * 0.5:
             output.append(event)
             continue
 
@@ -200,6 +229,21 @@ def _apply_dynamics(
     levels = list(preset["piano"].get("dynamicLevels", ["mf", "f"]))
     phrase_dynamics = _phrase_dynamic_levels(phrases, piece_plan, levels)
 
+    # Production-quality restraint: at most ONE hairpin (cresc./dim.) per
+    # piece, attached to the apex phrase.  Real scores show one or two
+    # hairpins total — multi-hairpin output reads as cluttered.
+    apex_phrase_index = -1
+    if phrases:
+        avg_intensities: list[float] = []
+        for phrase_measures in phrases:
+            avg = sum(
+                float(piece_plan.intensity_curve.get(m, 0.5))
+                for m in phrase_measures
+            ) / max(1, len(phrase_measures))
+            avg_intensities.append(avg)
+        if avg_intensities:
+            apex_phrase_index = max(range(len(avg_intensities)), key=lambda i: avg_intensities[i])
+
     for phrase_index, phrase_measures in enumerate(phrases):
         if not phrase_measures:
             continue
@@ -232,7 +276,13 @@ def _apply_dynamics(
         if rh_phrase_events:
             rh_phrase_events[0]["dynamic"] = start_level
 
-        if rh_phrase_events and len(rh_phrase_events) >= 2 and abs(end_scalar - start_scalar) > 0.06:
+        # Only attach a hairpin to the apex phrase.
+        if (
+            phrase_index == apex_phrase_index
+            and rh_phrase_events
+            and len(rh_phrase_events) >= 3
+            and abs(end_scalar - start_scalar) > 0.10
+        ):
             hairpin_id = f"hairpin-{phrase_index + 1}"
             rh_phrase_events[0]["hairpinStart"] = {
                 "id": hairpin_id,
@@ -386,9 +436,11 @@ def _apply_slurs(
         if len(current_run) >= 2:
             runs.append(current_run)
 
-        chosen_ids: set[str] = set()
+        # Production-quality restraint: at most ONE slur per phrase. SRF
+        # outputs have one or two slurs total — multi-slur phrases read as
+        # cluttered.  We pick the single best chunk across all runs.
+        all_candidates: list[tuple[float, list[dict[str, Any]]]] = []
         for run in runs:
-            candidates: list[tuple[float, list[dict[str, Any]]]] = []
             for lengths in (preferred_lengths, fallback_lengths):
                 for chunk_length in lengths:
                     if len(run) < chunk_length:
@@ -397,20 +449,22 @@ def _apply_slurs(
                         chunk = run[start:start + chunk_length]
                         score = _chunk_score(chunk, total, pulse)
                         if score >= 0:
-                            candidates.append((score, chunk))
-                if candidates:
+                            all_candidates.append((score, chunk))
+                if all_candidates:
                     break
 
-            if not candidates:
-                continue
+        if not all_candidates:
+            continue
 
-            candidates.sort(key=lambda item: item[0], reverse=True)
-            for _, chunk in candidates:
-                chunk_ids = {str(event["eventId"]) for event in chunk if event.get("eventId")}
-                if chunk_ids and not (chunk_ids & chosen_ids):
-                    _attach_slur(chunk)
-                    chosen_ids.update(chunk_ids)
-                    break
+        # Strong threshold — only slur a chunk that's noticeably stepwise +
+        # rhythmically connected.  Below grade 4, raise the bar further so
+        # beginner pieces don't get unnecessary slurs.
+        score_threshold = 5.0 if grade < 4 else 3.5
+        all_candidates.sort(key=lambda item: item[0], reverse=True)
+        best_score, best_chunk = all_candidates[0]
+        if best_score < score_threshold:
+            continue
+        _attach_slur(best_chunk)
 
     return events
 
@@ -422,7 +476,13 @@ def _apply_articulations(
     preset: dict[str, Any],
     rng: random.Random,
 ) -> list[dict[str, Any]]:
-    """Add articulation based on phrase role, texture, and touch."""
+    """Add articulation based on phrase role, texture, and touch.
+
+    Production-quality restraint: at most ONE accent or staccato per phrase,
+    plus one cadence tenuto.  Real sight-reading material uses articulation
+    sparingly — clutter from staccato dots/accents on every other note is a
+    strong "engine-generated" tell.
+    """
     chance = float(preset["piano"].get("articulationChance", 0.0))
     if chance <= 0:
         return events
@@ -430,60 +490,74 @@ def _apply_articulations(
     total = _measure_total(request["timeSignature"])
     pulse = _pulse_value(request["timeSignature"])
 
-    for event in sorted(events, key=_expression_sort_key):
+    sorted_events = sorted(events, key=_expression_sort_key)
+    # Track articulation count per (phrase_index, kind) so we can cap.
+    phrase_articulations: dict[int, int] = {}
+    MAX_PER_PHRASE = 1 if grade < 5 else 2
+
+    # Pass 1: cadence-tenuto on the final RH cadence note (always musical).
+    for event in sorted_events:
         if event.get("isRest") or not event.get("pitches"):
             continue
         if event.get("tieType") in {"continue", "stop"}:
             continue
+        role = str(event.get("measureRole", "develop"))
+        duration_value = float(event.get("_actualDur", event["quarterLength"]))
+        if (
+            role == "cadence"
+            and duration_value >= pulse * 1.5
+            and event.get("hand") == "rh"
+            and grade >= 4
+        ):
+            event["articulation"] = "tenuto"
+
+    # Pass 2: rank candidate events for accent/staccato by musical importance,
+    # then attach at most MAX_PER_PHRASE per phrase.
+    candidates: list[tuple[float, dict[str, Any], str]] = []
+    for event in sorted_events:
+        if event.get("isRest") or not event.get("pitches"):
+            continue
+        if event.get("articulation"):  # already has tenuto
+            continue
+        if event.get("tieType") in {"continue", "stop"}:
+            continue
+        if event.get("hand") != "rh":
+            continue  # Articulations land on the lead hand only.
+        if event.get("slurId"):
+            continue  # Don't articulate inside a slur.
 
         duration_value = float(event.get("_actualDur", event["quarterLength"]))
         role = str(event.get("measureRole", "develop"))
         local_start = _local_measure_offset(event, total)
         on_pulse = abs((local_start / pulse) - round(local_start / pulse)) < 0.08
-        chordal = len(event.get("pitches", [])) > 1
-        slurred = bool(event.get("slurId"))
 
-        if slurred:
-            if (
-                grade >= 4
-                and event.get("slurRole") == "stop"
-                and duration_value >= pulse * 0.66
-                and role in {"answer", "cadence"}
-                and rng.random() < 0.42
-            ):
-                event["articulation"] = "tenuto"
+        # Score: prefer the apex, downbeats of intensify bars, clear accents.
+        score = 0.0
+        if role == "intensify":
+            score += 1.5
+        if on_pulse and abs(local_start) < 0.001:  # bar downbeat
+            score += 1.0
+        if event.get("hairpinStart"):
+            score += 0.8
+
+        # Staccato candidate: short notes in develop/intensify roles.
+        if duration_value <= 0.5 and role in {"develop", "intensify"} and grade >= 4:
+            candidates.append((score + 0.4, event, "staccato"))
+        # Accent candidate: longer notes on strong beats.
+        if duration_value >= pulse and role in {"intensify", "answer"} and on_pulse and score > 0:
+            candidates.append((score, event, "accent"))
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    for score, event, kind in candidates:
+        if score < 1.0:
+            break
+        phrase_index = int(event.get("phraseIndex", 0))
+        if phrase_articulations.get(phrase_index, 0) >= MAX_PER_PHRASE:
             continue
-
-        if role == "cadence" and duration_value >= pulse and event.get("hand") == "rh":
-            event["articulation"] = "tenuto"
+        if rng.random() > min(0.72, chance * 3.0):
             continue
-
-        if (
-            duration_value <= max(0.5, pulse * 0.45)
-            and event.get("hand") == "lh"
-            and event.get("leftFamily") in {"repeated", "support-bass", "simple-broken", "waltz-bass"}
-            and rng.random() < chance * 1.6
-        ):
-            event["articulation"] = "staccato"
-            continue
-
-        if (
-            duration_value <= 0.5
-            and role in {"develop", "intensify"}
-            and rng.random() < chance * 1.15
-        ):
-            event["articulation"] = "staccato"
-            continue
-
-        if (
-            on_pulse
-            and (role == "intensify" or chordal or event.get("hairpinStart"))
-            and rng.random() < chance * 0.9
-        ):
-            if duration_value <= 0.75 and rng.random() < 0.35:
-                event["articulation"] = "staccato"
-            else:
-                event["articulation"] = "accent"
+        event["articulation"] = kind
+        phrase_articulations[phrase_index] = phrase_articulations.get(phrase_index, 0) + 1
 
     return events
 

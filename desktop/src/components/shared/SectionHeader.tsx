@@ -5,8 +5,7 @@ interface SectionHeaderProps {
 export function SectionHeader({ title }: SectionHeaderProps) {
   return (
     <h3 
-      className="text-sm font-semibold text-[#1C1C1E] mb-3"
-      style={{ fontFamily: 'Inter, sans-serif' }}
+      className="section-title"
     >
       {title}
     </h3>

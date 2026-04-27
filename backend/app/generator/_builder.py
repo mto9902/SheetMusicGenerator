@@ -25,6 +25,10 @@ from ._texture import (
     _apply_penultimate_ending,
     _apply_lh_piece_ending,
     _apply_lh_variation_pass,
+    _apply_half_cadence_landing,
+    _apply_leap_gap_fill,
+    _apply_hand_complementarity,
+    _apply_pulse_alignment,
 )
 from ._planning import (
     _build_style_profile,
@@ -32,6 +36,7 @@ from ._planning import (
     _assign_phrase_grammars,
     _build_piece_plan,
     _pick_phrase_plan,
+    _pick_piece_motif_kernel,
     _resolve_top_line_target,
     _resolve_bass_line_target,
 )
@@ -271,14 +276,20 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
             else:
                 preferred_boost = 1.35 if grade == 1 and grade_stage is not None else 2.35
             weight *= preferred_boost
-        if grade == 1 and grade_stage in {"g1-extend", "g1-staff"}:
+        if grade == 1 and grade_stage == "g1-pocket":
             if family == "held":
-                weight *= 0.48
-            elif family in {"repeated", "support-bass"}:
-                weight *= 1.55
-        elif grade == 1 and grade_stage == "g1-pocket":
-            if family == "repeated":
-                weight *= 1.15
+                weight *= 4.0
+            elif family == "repeated":
+                weight *= 0.35
+            else:
+                weight *= 0.05
+        elif grade == 1 and grade_stage in {"g1-extend", "g1-staff"}:
+            if family == "held":
+                weight *= 2.5
+            elif family == "support-bass":
+                weight *= 0.85
+            elif family == "repeated":
+                weight *= 0.55
         if grade <= 2 and hand_activity == "both":
             if coordination_style == "together":
                 if family in {"block-half", "bass-and-chord", "block-quarter"}:
@@ -299,6 +310,15 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
     # Phase 6: choose archetype/contour through the variation profile.
     piece_archetype = _pick_profile_archetype(variation_profile, rng)
     piece_contour = _pick_profile_contour(variation_profile, rng)
+
+    # Phase 11: pick a piece-wide motif kernel matched to the contour. This is
+    # the "thing you can hum" — every melody bar will share this gesture in
+    # some transformed form, giving the listener a recognizable shape.
+    piece_motif_name, piece_motif_steps = _pick_piece_motif_kernel(
+        str(piece_contour) if piece_contour else "arch",
+        grade,
+        rng,
+    )
 
     # Phase 3: store phrase A's rhythm templates for A' replay
     phrase_a_rhythm_templates: dict[int, list[dict[str, Any]]] = {}  # mi_in_phrase -> template
@@ -323,6 +343,8 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
             piece_lh_family=piece_lh_family,
             piece_archetype=piece_archetype,
             piece_contour=piece_contour,
+            piece_motif_steps=piece_motif_steps,
+            piece_motif_name=piece_motif_name,
             phrase_grammar=pg,
             variation_profile=variation_profile,
         )
@@ -535,14 +557,61 @@ def _build_piano_candidate(request: dict[str, Any], rng: random.Random) -> dict[
     events = _apply_right_hand_harmonic_punctuations(events, request, preset, rng)
     events = _repair_right_hand_leaps(events, rh_pool, max_leap)
 
+    # Half-cadence landing: at antecedent/half-cadence boundaries, force the
+    # last RH note onto a V chord tone (5̂ or 2̂) so the question/answer
+    # contrast between phrases reads audibly.
+    measure_count = int(request["measureCount"])
+    for phrase_index, phrase_measures in enumerate(phrases):
+        if not phrase_measures:
+            continue
+        phrase_grammar = (
+            piece_plan.phrase_grammars[phrase_index]
+            if phrase_index < len(piece_plan.phrase_grammars)
+            else None
+        )
+        last_bar = phrase_measures[-1]
+        if last_bar == measure_count:
+            continue  # The piece's final cadence has its own logic.
+        is_half_cadence = (
+            phrase_grammar is not None
+            and phrase_grammar.cadence_type in {"half", "deceptive"}
+        )
+        if is_half_cadence:
+            _apply_half_cadence_landing(
+                events,
+                last_bar,
+                rh_pool,
+                request["keySignature"],
+            )
+
+    # Gap-fill: after a leap, step back into the gap so the leap reads as
+    # deliberate instead of disjointed.
+    events = _apply_leap_gap_fill(events, rh_pool, max_leap)
+
     # Break up runs of identical LH rhythmic shapes so the accompaniment
     # doesn't lock into the same pattern for the whole piece.
-    events = _apply_lh_variation_pass(
+    if grade > 1:
+        events = _apply_lh_variation_pass(
+            events,
+            total,
+            int(request["measureCount"]),
+            rng,
+        )
+
+    # Hand complementarity: when RH is busy (≥ 5 notes/bar), simplify LH so
+    # both hands aren't moving at the same time.  Real piano writing uses
+    # this principle universally — generators that ignore it produce
+    # visually chaotic scores.
+    events = _apply_hand_complementarity(
         events,
         total,
         int(request["measureCount"]),
-        rng,
     )
+
+    # Pulse alignment: snap event offsets to clean subdivisions so tied
+    # syncopations and floating-point drift don't leave events on awkward
+    # 0.501-style positions.
+    events = _apply_pulse_alignment(events, total, pulse)
 
     # Post-processing: ties, dynamics, slurs, articulations, playback touch
     events = _apply_ties(events, request, rng)

@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { Route, Routes, Navigate } from "react-router-dom";
 
 import { ChromeBar } from "@/components/ChromeBar";
@@ -12,43 +12,65 @@ import type { NoteEvent } from "@shared/types";
 export default function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
+  const autoStopRef = useRef<number | null>(null);
+  const playbackTokenRef = useRef(0);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [noteEvents, setNoteEvents] = useState<NoteEvent[] | null>(null);
   const [bpm, setBpm] = useState<number>(92);
   const [isPlaying, setIsPlaying] = useState(false);
 
-  const handleSetAudio = useCallback((url: string | null, events: NoteEvent[] | null, tempo: number) => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
+  const clearAutoStop = useCallback(() => {
+    if (autoStopRef.current !== null) {
+      window.clearTimeout(autoStopRef.current);
+      autoStopRef.current = null;
     }
+  }, []);
+
+  const stopActivePlayback = useCallback(() => {
+    playbackTokenRef.current += 1;
+    clearAutoStop();
+
     if (stopRef.current) {
       stopRef.current();
       stopRef.current = null;
     }
+
+    if (audioRef.current) {
+      const audio = audioRef.current;
+      audio.pause();
+      try {
+        audio.currentTime = 0;
+      } catch {
+        // Some browsers reject seeking before metadata loads.
+      }
+      audioRef.current = null;
+    }
+
+    setIsPlaying(false);
+  }, [clearAutoStop]);
+
+  const handleSetAudio = useCallback((url: string | null, events: NoteEvent[] | null, tempo: number) => {
+    stopActivePlayback();
     setAudioUrl(url);
     setNoteEvents(events);
     setBpm(tempo);
-    setIsPlaying(false);
-  }, []);
+  }, [stopActivePlayback]);
 
   const togglePlayback = useCallback(async () => {
     if (isPlaying) {
-      if (stopRef.current) {
-        stopRef.current();
-        stopRef.current = null;
-      }
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-      }
-      setIsPlaying(false);
+      stopActivePlayback();
       return;
     }
+
+    stopActivePlayback();
+    const playbackToken = playbackTokenRef.current + 1;
+    playbackTokenRef.current = playbackToken;
 
     if (noteEvents && noteEvents.length > 0) {
       try {
         await initPiano();
+        if (playbackTokenRef.current !== playbackToken) return;
+
         const stop = schedulePlayback(noteEvents, bpm, () => {});
         stopRef.current = stop;
         setIsPlaying(true);
@@ -58,12 +80,15 @@ export default function App() {
           e.offset + e.quarterLength > max.offset + max.quarterLength ? e : max
         , noteEvents[0]);
         const durationSec = (lastEvent.offset + lastEvent.quarterLength) * (60 / bpm) + 1;
-        window.setTimeout(() => {
+        autoStopRef.current = window.setTimeout(() => {
+          if (playbackTokenRef.current !== playbackToken) return;
+
           if (stopRef.current) {
             stopRef.current();
             stopRef.current = null;
-            setIsPlaying(false);
           }
+          autoStopRef.current = null;
+          setIsPlaying(false);
         }, durationSec * 1000);
         return;
       } catch {
@@ -73,16 +98,34 @@ export default function App() {
 
     if (audioUrl) {
       const audio = new Audio(audioUrl);
-      audio.onended = () => setIsPlaying(false);
-      audio.onpause = () => setIsPlaying(false);
-      audio.onplay = () => setIsPlaying(true);
+      audio.onended = () => {
+        if (playbackTokenRef.current !== playbackToken) return;
+        audioRef.current = null;
+        setIsPlaying(false);
+      };
+      audio.onpause = () => {
+        if (playbackTokenRef.current !== playbackToken) return;
+        setIsPlaying(false);
+      };
+      audio.onplay = () => {
+        if (playbackTokenRef.current !== playbackToken) return;
+        setIsPlaying(true);
+      };
       audioRef.current = audio;
-      audio.play().catch(() => {});
+      audio.play().catch(() => {
+        if (playbackTokenRef.current !== playbackToken) return;
+        audioRef.current = null;
+        setIsPlaying(false);
+      });
     }
-  }, [audioUrl, noteEvents, bpm, isPlaying]);
+  }, [audioUrl, noteEvents, bpm, isPlaying, stopActivePlayback]);
+
+  useEffect(() => {
+    return () => stopActivePlayback();
+  }, [stopActivePlayback]);
 
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#F5F5F7]">
+    <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#F1F1F1]">
       <ChromeBar
         audioUrl={audioUrl}
         isPlaying={isPlaying}

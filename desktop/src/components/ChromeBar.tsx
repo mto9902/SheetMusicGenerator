@@ -16,13 +16,12 @@ const navItems = [
 
 export function ChromeBar({ audioUrl, isPlaying, onPlayPause }: ChromeBarProps) {
   return (
-    <div className="top-bar h-[52px] flex items-center justify-between px-6 shrink-0 z-30">
+    <div className="top-bar h-[60px] flex items-center justify-between px-6 shrink-0 z-30">
       {/* Left - Brand */}
       <div className="flex items-center gap-2 min-w-0">
-        <Music size={18} className="text-[#8E8E93] shrink-0" strokeWidth={1.5} />
+        <Music size={18} className="text-gray-500 shrink-0" strokeWidth={1.5} />
         <span 
-          className="text-lg font-bold text-[#1C1C1E] tracking-tight truncate"
-          style={{ fontFamily: 'Inter, sans-serif' }}
+          className="text-lg font-bold text-gray-800 tracking-tight truncate"
         >
           Caprice
         </span>
@@ -34,7 +33,7 @@ export function ChromeBar({ audioUrl, isPlaying, onPlayPause }: ChromeBarProps) 
           <div className="flex items-center gap-2">
             <motion.button
               type="button"
-              className="flex items-center justify-center rounded-full bg-white text-[#1C1C1E] border border-[#E5E5EA] cursor-pointer transition-colors duration-150 hover:bg-[#F5F5F7]"
+              className="tactile-circle text-gray-600"
               style={{ width: 36, height: 36 }}
               whileTap={{ scale: 0.95 }}
               onClick={() => {}}
@@ -45,8 +44,8 @@ export function ChromeBar({ audioUrl, isPlaying, onPlayPause }: ChromeBarProps) 
               type="button"
               className={`flex items-center justify-center rounded-full cursor-pointer transition-colors duration-150 ${
                 isPlaying
-                  ? 'bg-[#2C2C2E] text-white'
-                  : 'bg-white text-[#1C1C1E] border border-[#E5E5EA] hover:bg-[#F5F5F7]'
+                  ? 'bg-[#3A3A3A] text-white shadow-inner'
+                  : 'tactile-circle text-gray-600'
               }`}
               style={{ width: 40, height: 40 }}
               whileTap={{ scale: 0.95 }}
@@ -60,7 +59,7 @@ export function ChromeBar({ audioUrl, isPlaying, onPlayPause }: ChromeBarProps) 
             </motion.button>
             <motion.button
               type="button"
-              className="flex items-center justify-center rounded-full bg-white text-[#1C1C1E] border border-[#E5E5EA] cursor-pointer transition-colors duration-150 hover:bg-[#F5F5F7]"
+              className="tactile-circle text-gray-600"
               style={{ width: 36, height: 36 }}
               whileTap={{ scale: 0.95 }}
               onClick={() => {}}
@@ -69,17 +68,17 @@ export function ChromeBar({ audioUrl, isPlaying, onPlayPause }: ChromeBarProps) 
             </motion.button>
           </div>
         ) : (
-          <nav className="flex items-center gap-1 bg-[#F5F5F7] rounded-lg p-1">
+          <nav className="flex items-center gap-1 bg-white/70 rounded-2xl p-1 shadow-sm border border-black/5">
             {navItems.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
                 end={item.to === "/"}
                 className={({ isActive }) =>
-                  `px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  `px-4 py-1.5 rounded-xl text-sm font-semibold transition-colors ${
                     isActive
-                      ? 'bg-white text-[#1C1C1E] shadow-sm'
-                      : 'text-[#8E8E93] hover:text-[#1C1C1E]'
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-500 hover:text-gray-900'
                   }`
                 }
               >
@@ -94,7 +93,7 @@ export function ChromeBar({ audioUrl, isPlaying, onPlayPause }: ChromeBarProps) 
       <div className="flex items-center gap-4 min-w-0">
         <NavLink 
           to="/settings" 
-          className="text-[#8E8E93] hover:text-[#1C1C1E] transition-colors shrink-0"
+          className="text-gray-500 hover:text-gray-900 transition-colors shrink-0"
         >
           <Settings size={20} />
         </NavLink>

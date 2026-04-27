@@ -102,11 +102,10 @@ export function ExercisePage({ onAudioChange }: ExercisePageProps) {
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [id, onAudioChange]);
 
   useEffect(() => {
     if (!practiceStart) {
-      setPracticeSeconds(0);
       return;
     }
     const interval = setInterval(() => {
@@ -306,8 +305,8 @@ export function ExercisePage({ onAudioChange }: ExercisePageProps) {
       </div>
 
       {/* Center - Score */}
-      <div className="flex-1 p-4 pb-16 min-w-0 overflow-hidden">
-        <div className="h-full flex flex-col">
+      <div className="flex-1 h-full min-h-0 p-4 pb-16 min-w-0 overflow-hidden">
+        <div className="h-full min-h-0 flex flex-col">
           <div className="flex items-start justify-between gap-4 mb-4">
             <div>
               <p className="text-xs text-[#8E8E93] uppercase tracking-widest font-bold mb-1">Score</p>
@@ -330,8 +329,8 @@ export function ExercisePage({ onAudioChange }: ExercisePageProps) {
 
           {notice ? <div className="notice mb-4">{notice}</div> : null}
 
-          <div className="flex-1 overflow-y-auto scrollbar-hide">
-            <div className="notation-paper">
+          <div className="score-viewport flex-1 min-h-0">
+            <div className="notation-paper score-paper-fixed h-full min-h-0">
               <NotationPanel svg={exercise.svg} scale={settings.notationScale} />
             </div>
           </div>

@@ -29,49 +29,13 @@ def _apply_accidental(
     *,
     piece_accidental_count: int = 0,
 ) -> list[list[int]]:
-    # Piece-level budget: max 2 accidentals for grade 4, max 3 for grade 5.
-    # This prevents the scattered-accidentals-everywhere look.
-    grade = int(request["grade"])
-    max_accidentals = 2 if grade <= 4 else 3
-    if piece_accidental_count >= max_accidentals:
-        return pitch_groups
-
-    if (
-        not request["allowAccidentals"]
-        or grade < 4
-        or not phrase_plan["accidentalRoles"]
-        or rng.random() >= float(preset["piano"]["accidentalChance"])
-    ):
-        return pitch_groups
-
-    # Only apply accidentals in develop/intensify roles, never in cadence or establish.
-    # This concentrates accidentals where they serve a musical purpose.
-    measure_role = phrase_plan.get("_currentMeasureRole", "develop")
-    if measure_role in ("cadence", "establish"):
-        return pitch_groups
-
-    candidates = [
-        index for index in range(len(pitch_groups) - 1)
-        if pitch_groups[index] and pitch_groups[index + 1]
-    ]
-    if not candidates:
-        return pitch_groups
-
-    updated = [list(group) for group in pitch_groups]
-    index = rng.choice(candidates)
-    role = rng.choice(phrase_plan["accidentalRoles"])
-    next_pitch = int(updated[index + 1][0])
-
-    if role in {"upper-neighbor", "harmonic-leading-tone"}:
-        updated[index][0] = next_pitch + 1
-    elif role == "lower-neighbor":
-        updated[index][0] = next_pitch - 1
-    elif role == "chord-color-extension":
-        updated[index][0] = next_pitch + rng.choice([-1, 1])
-    else:
-        updated[index][0] = next_pitch - 1 if rng.random() < 0.5 else next_pitch + 1
-
-    return updated
+    """Disabled: chromatic accidentals now go through the post-process
+    `_inject_chromatic_approaches_post` which inserts (rather than replaces)
+    a chromatic passing tone with proper voice leading.  The destructive
+    inline replacement here produced augmented-2nd jumps and "broken" notes,
+    so it's been retired.  Returns input unchanged.
+    """
+    return pitch_groups
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +128,12 @@ def _build_left_pattern(
 
     half = pulse * 2
     eighth = pulse / 2
-    accent_bar = bool(is_phrase_start or is_cadence or measure_role in {"intensify", "answer"})
-    full_vertical = bool(is_cadence or measure_role == "intensify" or (is_phrase_start and request["grade"] >= 4))
+    # Production-quality LH: single bass notes are the default; dyads/chords
+    # appear only on cadence and apex (intensify) bars.  SRF-style writing
+    # keeps the LH supportive and out of the way — dyads on every bar create
+    # visual heaviness that obscures the melodic line.
+    accent_bar = bool(is_cadence or measure_role == "intensify")
+    full_vertical = bool(is_cadence and request["grade"] >= 4)
     default_dyad = [low, top] if len(tones) >= 2 else [low]
     rich_dyad = [mid, top] if len(tones) >= 3 else default_dyad
     full_chord = [low, mid, top] if len(tones) >= 3 else default_dyad
@@ -177,16 +145,48 @@ def _build_left_pattern(
     support_dyad = _normalize_pitch_stack(support_dyad)
     accent_support = _normalize_pitch_stack(accent_support)
 
+    if grade == 1 and grade_stage in {"g1-pocket", "g1-extend", "g1-staff"}:
+        # Grade 1 should read as bass support, not accompaniment technique.
+        # Keep all LH sonorities single-note and sparse; the stage controls
+        # range coverage, not rhythmic or harmonic complexity.
+        if grade_stage == "g1-pocket" or family == "held" or total <= half:
+            starts = [0.0]
+            durations = [total]
+            patterns = [[low]]
+            technique = "held bass"
+        else:
+            second_pitch = top if family == "support-bass" and top != low else low
+            starts = [0.0, half]
+            durations = [half, max(0.0, total - half)]
+            patterns = [[low], [second_pitch]]
+            technique = "simple bass support"
+
+        return [
+            {
+                "hand": "lh",
+                "offset": round(start, 3),
+                "quarterLength": round(float(duration), 3),
+                "isRest": False,
+                "pitches": _normalize_pitch_stack(pitches)[:1],
+                "technique": technique,
+            }
+            for start, duration, pitches in zip(starts, durations, patterns, strict=False)
+            if float(duration) > 0.001
+        ]
+
     if family == "held":
-        if full_vertical and grade >= 3 and len(harmony_tones) >= 3:
+        # Single bass note is the default — this matches SRF-style sight-
+        # reading material where the LH is supportive, not harmonically
+        # dominant.  Dyads/chords appear only on cadence bars.
+        if is_cadence and grade >= 4 and len(harmony_tones) >= 3:
             patterns = [full_chord]
-        elif accent_bar and request["grade"] >= 2:
+        elif is_cadence and grade >= 3 and len(harmony_tones) >= 2:
             patterns = [default_dyad]
         else:
             patterns = [[low]]
         durations = [total]
         starts = [0.0]
-        technique = "held chord"
+        technique = "held bass" if len(patterns[0]) == 1 else "held chord"
     elif family == "repeated":
         beat_starts = [round(i * pulse, 3) for i in range(int(total / pulse))]
         if grade >= 5 and len(tones) >= 2 and len(beat_starts) >= 4:
@@ -268,15 +268,18 @@ def _build_left_pattern(
             durations = [pulse, total - pulse]
         technique = "LH arpeggio"
     elif family == "block-half":
-        # Block chords on half-note rhythm — the SRF staple for LH support
+        # Block-half pattern — production-quality default is bass on beat 1
+        # and ALSO bass (or root with optional 5th on grade 5+) on beat 3.
+        # Dyads/chords appear only on cadence bars where the harmonic
+        # arrival is meaningful.
         half_starts = [round(i * half, 3) for i in range(max(1, int(total / half)))]
-        if full_vertical and len(harmony_tones) >= 3:
-            patterns = _sequence_from_cycle([full_chord, full_chord], len(half_starts))
-        elif len(harmony_tones) >= 2:
-            if accent_bar:
-                patterns = _sequence_from_cycle([default_dyad, [low]], len(half_starts))
-            else:
-                patterns = _sequence_from_cycle([[low], default_dyad], len(half_starts))
+        if is_cadence and grade >= 4 and len(harmony_tones) >= 3:
+            patterns = _sequence_from_cycle([default_dyad, full_chord], len(half_starts))
+        elif is_cadence and len(harmony_tones) >= 2:
+            patterns = _sequence_from_cycle([[low], default_dyad], len(half_starts))
+        elif grade >= 5 and len(harmony_tones) >= 2:
+            # Grade 5: occasional dyad on beat 3 for harmonic colour.
+            patterns = _sequence_from_cycle([[low], default_dyad], len(half_starts))
         else:
             patterns = _sequence_from_cycle([[low]], len(half_starts))
         durations = [half for _ in half_starts]
@@ -295,30 +298,34 @@ def _build_left_pattern(
         starts = beat_starts
         technique = "harmonic support"
     elif family == "bass-and-chord":
-        # Bass note beat 1, chord beat 3 (classical piano LH)
+        # Classical bass + chord pattern: bass on beat 1, chord on beat 3.
+        # Production-quality restraint: the chord position uses single bass
+        # (octave or repeated root) by default; only switches to a dyad/chord
+        # at cadence bars where the harmonic arrival is meaningful.
         if request["grade"] >= 5 and total >= pulse * 4:
+            # Grade 5: classical 4-beat split [bass, chord, alt-bass, chord].
             starts = [0.0, pulse, pulse * 2, pulse * 3]
-            if len(harmony_tones) >= 3 and full_vertical:
-                patterns = [[low], support_dyad, [approach], full_chord]
+            if is_cadence and len(harmony_tones) >= 3:
+                patterns = [[low], default_dyad, [approach], full_chord]
             elif len(harmony_tones) >= 2:
-                patterns = [[low], support_dyad, [approach], support_dyad]
+                patterns = [[low], default_dyad, [approach], default_dyad]
             else:
                 patterns = [[low], [low], [approach], [low]]
             durations = [pulse, pulse, pulse, total - pulse * 3]
         elif total >= half * 2:
             starts = [0.0, half]
-            if len(harmony_tones) >= 3 and full_vertical:
+            if is_cadence and grade >= 4 and len(harmony_tones) >= 3:
                 patterns = [[low], rich_dyad]
-            elif len(harmony_tones) >= 2:
+            elif is_cadence and len(harmony_tones) >= 2:
                 patterns = [[low], default_dyad]
             else:
                 patterns = [[low], [low]]
             durations = [half, total - half]
         else:
             starts = [0.0]
-            if len(harmony_tones) >= 3 and full_vertical:
+            if is_cadence and grade >= 4 and len(harmony_tones) >= 3:
                 patterns = [full_chord]
-            elif len(harmony_tones) >= 2:
+            elif is_cadence and len(harmony_tones) >= 2:
                 patterns = [default_dyad]
             else:
                 patterns = [[low]]

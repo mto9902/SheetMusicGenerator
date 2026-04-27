@@ -26,7 +26,7 @@ export function Dropdown<T extends string>({ value, options, onChange, label }: 
   }, [open]);
 
   return (
-    <div className="relative w-full" ref={containerRef}>
+    <div className={`relative w-full ${open ? 'z-[80]' : 'z-0'}`} ref={containerRef}>
       {label && (
         <label className="block text-xs text-[#8E8E93] mb-1.5 font-medium">
           {label}
@@ -34,7 +34,7 @@ export function Dropdown<T extends string>({ value, options, onChange, label }: 
       )}
       <button
         type="button"
-        className="w-full h-10 px-3 flex items-center justify-between rounded-lg bg-white border border-[#E5E5EA] text-left text-sm text-[#1C1C1E] cursor-pointer transition-colors duration-150 hover:border-[#D1D1D6]"
+        className="dropdown-select flex min-h-10 items-center justify-between gap-3 text-left"
         onClick={() => setOpen(!open)}
       >
         <span className="font-medium">{value}</span>

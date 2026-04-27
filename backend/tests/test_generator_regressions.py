@@ -444,10 +444,48 @@ class GeneratorRegressionTests(unittest.TestCase):
             msg=f"One final-bar rhythm dominated: {rhythm_signatures}",
         )
 
-    def test_lh_pattern_does_not_repeat_too_many_bars(self) -> None:
+    def test_grade1_left_hand_stays_sparse_and_single_note(self) -> None:
+        for grade_stage in ("g1-pocket", "g1-extend", "g1-staff"):
+            with self.subTest(grade_stage=grade_stage):
+                request = {
+                    **BASE_REQUEST,
+                    "gradeStage": grade_stage,
+                    "keySignature": "C",
+                    "measureCount": 8,
+                    "leftHandPattern": "support-bass",
+                    "seed": f"g1sparse-{grade_stage}",
+                }
+                candidate = _select_candidate(request)
+                self.assertIsNotNone(candidate)
+                events = candidate["events"]  # type: ignore[index]
+                lh_by_measure: dict[int, list[dict[str, Any]]] = {}
+                for event in events:
+                    if event["hand"] != "lh" or event["isRest"]:
+                        continue
+                    self.assertLessEqual(
+                        len(event.get("pitches", [])),
+                        1,
+                        msg=f"Grade 1 LH emitted a chord: {event}",
+                    )
+                    lh_by_measure.setdefault(int(event["measure"]), []).append(event)
+
+                per_measure_cap = 1 if grade_stage == "g1-pocket" else 2
+                for measure_number, measure_events in lh_by_measure.items():
+                    self.assertLessEqual(
+                        len(measure_events),
+                        per_measure_cap,
+                        msg=f"Grade 1 LH is too active in measure {measure_number}: {measure_events}",
+                    )
+                    self.assertTrue(
+                        all(float(event["quarterLength"]) >= 2.0 for event in measure_events),
+                        msg=f"Grade 1 LH used short durations: {measure_events}",
+                    )
+
+    def test_lh_pattern_does_not_repeat_too_many_bars_for_upper_grades(self) -> None:
         request = {
             **BASE_REQUEST,
-            "gradeStage": "g1-extend",
+            "grade": 3,
+            "gradeStage": None,
             "keySignature": "C",
             "measureCount": 8,
             "leftHandPattern": "support-bass",

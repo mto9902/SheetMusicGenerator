@@ -199,7 +199,7 @@ def _music21_key(key_signature: str):
 def _engraving_system_interval(request: dict[str, Any], events: list[dict[str, Any]]) -> int:
     measure_count = int(request["measureCount"])
     if measure_count <= 4:
-        return 4
+        return measure_count
 
     density_samples: list[float] = []
     dense_measures = 0
@@ -237,12 +237,34 @@ def _engraving_system_interval(request: dict[str, Any], events: list[dict[str, A
     dense = avg_density >= 7.0 or dense_measures >= max(1, measure_count // 4)
 
     if measure_count == 8:
-        return 2 if dense else 4
+        return 4
     if measure_count == 12:
-        return 3 if dense else 4
+        return 4
     if measure_count >= 16:
         return 2 if very_dense else 4
     return 4
+
+
+def _engraving_page_width(request: dict[str, Any], events: list[dict[str, Any]]) -> int:
+    measures_per_system = max(1, _engraving_system_interval(request, events))
+    time_signature = str(request.get("timeSignature", "4/4"))
+
+    beats_per_measure = {
+        "2/4": 2.0,
+        "3/4": 3.0,
+        "4/4": 4.0,
+        "6/8": 3.0,
+    }.get(time_signature, 4.0)
+
+    note_density = sum(
+        1.0 + max(0, len(event.get("pitches", [])) - 1) * 0.45
+        for event in events
+        if not event.get("isRest")
+    )
+    density_allowance = min(340, int(note_density * 6))
+    measure_allowance = int(measures_per_system * (190 + beats_per_measure * 58))
+
+    return max(1500, min(2600, 560 + measure_allowance + density_allowance))
 
 
 def _create_musicxml(request: dict[str, Any], events: list[dict[str, Any]], bpm: int) -> str:
@@ -333,7 +355,7 @@ def _create_musicxml(request: dict[str, Any], events: list[dict[str, Any]], bpm:
     return xml_bytes.decode("utf-8")
 
 
-def _render_svg(music_xml: str, title: str) -> str:
+def _render_svg(music_xml: str, title: str, request: dict[str, Any] | None = None, events: list[dict[str, Any]] | None = None) -> str:
     if toolkit is None:
         return (
             '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360">'
@@ -347,8 +369,9 @@ def _render_svg(music_xml: str, title: str) -> str:
     import re
 
     vrv = toolkit()
+    page_width = _engraving_page_width(request, events or []) if request else 1240
     vrv.setOptions({
-        "pageWidth": 920,
+        "pageWidth": page_width,
         "pageMarginLeft": 26,
         "pageMarginRight": 26,
         "pageMarginTop": 30,

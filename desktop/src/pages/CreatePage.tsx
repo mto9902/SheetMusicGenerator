@@ -223,6 +223,34 @@ export function CreatePage({ onAudioChange }: CreatePageProps) {
     setActiveExercise(null);
   }
 
+  const rightActions = (
+    <div className="flex gap-2">
+      <button
+        type="button"
+        className="tactile-btn flex-1 h-9 text-xs font-medium text-gray-600 disabled:opacity-45 disabled:cursor-not-allowed"
+        onClick={() => activeExercise && navigate(`/exercise/${activeExercise.exerciseId}`)}
+        disabled={!activeExercise}
+      >
+        Focus view
+      </button>
+      <button
+        type="button"
+        className="tactile-btn flex-1 h-9 text-xs font-medium text-gray-600 disabled:opacity-45 disabled:cursor-not-allowed"
+        onClick={saveActivePreset}
+        disabled={!activeExercise}
+      >
+        Save preset
+      </button>
+      <button
+        type="button"
+        className="tactile-btn h-9 px-3 text-xs font-medium text-gray-500"
+        onClick={resetToDefaults}
+      >
+        Reset
+      </button>
+    </div>
+  );
+
   if (loading) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -233,14 +261,14 @@ export function CreatePage({ onAudioChange }: CreatePageProps) {
 
   return (
     <div className="h-full flex flex-col relative">
-      <div className="flex-1 flex relative overflow-hidden">
+      <div className="flex-1 min-h-0 flex relative overflow-hidden">
         {/* Left - Parameters */}
         <div className="p-4 pb-16 shrink-0 overflow-y-auto scrollbar-hide">
           <ControlTower config={config} onChange={updateConfig} />
         </div>
 
         {/* Center - Notation */}
-        <div className="flex-1 p-4 pb-16 min-w-0 overflow-hidden">
+        <div className="flex-1 h-full min-h-0 p-4 pb-16 min-w-0 overflow-hidden flex flex-col">
           <PaperDesk
             exercise={activeExercise}
             scale={settings?.notationScale ?? 1}
@@ -251,7 +279,7 @@ export function CreatePage({ onAudioChange }: CreatePageProps) {
 
         {/* Right - Playback */}
         <div className="p-4 pb-16 shrink-0 overflow-y-auto scrollbar-hide">
-          <InstrumentCard config={config} onChange={updateConfig} />
+          <InstrumentCard config={config} onChange={updateConfig} actions={rightActions} />
         </div>
 
         {/* Bottom - History */}
@@ -264,32 +292,6 @@ export function CreatePage({ onAudioChange }: CreatePageProps) {
         />
       </div>
 
-      {/* Floating actions when score is active */}
-      {activeExercise && (
-        <div className="absolute top-4 right-4 z-30 flex items-center gap-2">
-          <button
-            type="button"
-            className="btn-secondary px-3 py-1.5 text-xs"
-            onClick={() => navigate(`/exercise/${activeExercise.exerciseId}`)}
-          >
-            Focus view
-          </button>
-          <button
-            type="button"
-            className="btn-secondary px-3 py-1.5 text-xs"
-            onClick={saveActivePreset}
-          >
-            Save preset
-          </button>
-          <button
-            type="button"
-            className="btn-secondary px-3 py-1.5 text-xs"
-            onClick={resetToDefaults}
-          >
-            Reset
-          </button>
-        </div>
-      )}
     </div>
   );
 }

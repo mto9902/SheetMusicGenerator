@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import type { ReactNode } from 'react';
 import { SectionHeader } from './shared/SectionHeader';
 import { RotaryKnob } from './shared/RotaryKnob';
 import { Minus, Plus } from 'lucide-react';
@@ -9,12 +10,12 @@ import { EXERCISE_OPTIONS, tempoPresetToBpm } from '@shared/options';
 interface InstrumentCardProps {
   config: ExerciseConfig;
   onChange: (patch: Partial<ExerciseConfig>) => void;
+  actions?: ReactNode;
 }
 
 const WHITE_KEYS = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
 const BLACK_KEYS = [null, 'C#', 'D#', null, 'F#', 'G#', 'A#'];
-
-export function InstrumentCard({ config, onChange }: InstrumentCardProps) {
+export function InstrumentCard({ config, onChange, actions }: InstrumentCardProps) {
   const bpm = tempoPresetToBpm(config.tempoPreset);
   const tempoValues = useMemo(() => EXERCISE_OPTIONS.tempoPresets.map((t) => t.value as TempoPreset), []);
 
@@ -25,9 +26,11 @@ export function InstrumentCard({ config, onChange }: InstrumentCardProps) {
   }
 
   return (
-    <div className="w-60 flex flex-col gap-3 overflow-y-auto scrollbar-hide pb-4">
+    <div className="w-[220px] flex flex-col gap-3 overflow-y-auto scrollbar-hide pb-4">
+      {actions}
+
       {/* Instrument Card */}
-      <div className="surface-card p-5">
+      <div className="panel-card p-4">
         <SectionHeader title="Instrument" />
         <Dropdown
           value={config.mode === 'piano' ? 'Piano' : 'Piano rhythm'}
@@ -37,7 +40,7 @@ export function InstrumentCard({ config, onChange }: InstrumentCardProps) {
       </div>
 
       {/* Mix Card */}
-      <div className="surface-card p-5">
+      <div className="panel-card p-4">
         <SectionHeader title="Mix" />
         <div className="flex items-center justify-center py-2">
           <RotaryKnob
@@ -56,8 +59,8 @@ export function InstrumentCard({ config, onChange }: InstrumentCardProps) {
               type="button"
               className={`flex-1 h-8 text-xs font-medium rounded-md border transition-colors ${
                 config.handActivity === ha
-                  ? 'bg-[#2C2C2E] text-white border-[#2C2C2E]'
-                  : 'bg-white text-[#1C1C1E] border-[#E5E5EA] hover:bg-[#F5F5F7]'
+                  ? 'bg-[#3A3A3A] text-white border-[#3A3A3A] shadow-inner'
+                  : 'tactile-btn text-gray-600'
               }`}
               onClick={() => onChange({ handActivity: ha })}
             >
@@ -68,26 +71,25 @@ export function InstrumentCard({ config, onChange }: InstrumentCardProps) {
       </div>
 
       {/* Tempo Card */}
-      <div className="surface-card p-5">
+      <div className="panel-card p-4">
         <SectionHeader title="Tempo" />
         <div className="flex items-center gap-2 justify-center">
           <button
             type="button"
-            className="btn-secondary w-8 h-8 flex items-center justify-center"
+            className="tactile-circle-sm w-10 h-10 flex items-center justify-center"
             onClick={() => adjustTempo(-1)}
             disabled={config.tempoPreset === tempoValues[0]}
           >
             <Minus size={14} />
           </button>
           <div 
-            className="w-14 h-10 flex items-center justify-center text-base font-semibold text-[#1C1C1E]"
-            style={{ fontFamily: '"SF Mono", Monaco, monospace' }}
+            className="w-12 text-center text-2xl font-bold tabular-nums text-gray-800"
           >
             {bpm}
           </div>
           <button
             type="button"
-            className="btn-secondary w-8 h-8 flex items-center justify-center"
+            className="tactile-circle-sm w-10 h-10 flex items-center justify-center"
             onClick={() => adjustTempo(1)}
             disabled={config.tempoPreset === tempoValues[tempoValues.length - 1]}
           >
@@ -97,23 +99,20 @@ export function InstrumentCard({ config, onChange }: InstrumentCardProps) {
       </div>
 
       {/* Output Card */}
-      <div className="surface-card p-5">
+      <div className="panel-card p-4">
         <SectionHeader title="Output" />
-        <div className="bg-[#F5F5F7] rounded-lg overflow-hidden p-3">
-          <div className="h-8 flex items-center gap-1">
-            {Array.from({ length: 20 }).map((_, i) => (
-              <div
-                key={i}
-                className="flex-1 rounded-full bg-[#D1D1D6]"
-                style={{ height: `${4 + Math.random() * 16}px` }}
-              />
-            ))}
-          </div>
+        <div className="rounded-xl overflow-hidden bg-[#F5F5F5] p-3">
+          <img
+            src="/waveform.png"
+            alt="Audio output waveform"
+            className="w-full h-12 object-contain opacity-60"
+            draggable={false}
+          />
         </div>
       </div>
 
       {/* Keyboard Card */}
-      <div className="surface-card p-5">
+      <div className="panel-card p-4">
         <SectionHeader title="Keyboard" />
         <div className="flex justify-center">
           <div className="relative flex">

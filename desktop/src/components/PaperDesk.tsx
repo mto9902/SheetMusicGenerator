@@ -15,8 +15,12 @@ export function PaperDesk({ exercise, scale = 1, onCompose, submitting }: PaperD
   const emptyState = !exercise;
 
   return (
-    <div className="flex-1 flex flex-col relative overflow-hidden">
-      <div className="flex-1 overflow-y-auto scrollbar-hide p-6 flex flex-col items-center justify-center min-h-0">
+    <div className="h-full min-h-0 flex flex-col relative overflow-hidden">
+      <div
+        className={`panel-card flex-1 min-h-0 overflow-hidden p-6 flex flex-col items-center ${
+          emptyState ? 'justify-center' : 'justify-start'
+        }`}
+      >
         {emptyState ? (
           <motion.div 
             className="flex flex-col items-center gap-5"
@@ -30,15 +34,15 @@ export function PaperDesk({ exercise, scale = 1, onCompose, submitting }: PaperD
             </p>
           </motion.div>
         ) : (
-          <div className="w-full max-w-[800px]">
-            <div className="notation-paper max-w-[800px] min-h-[400px] mx-auto">
+          <div className="score-viewport w-full h-full min-h-0 mx-auto">
+            <div className="score-paper-fixed h-full min-h-0 mx-auto">
               <NotationPanel svg={exercise.svg} scale={scale} />
             </div>
           </div>
         )}
       </div>
 
-      <div className="flex justify-center pb-6 relative z-10">
+      <div className="flex justify-center py-4 shrink-0 relative z-10">
         <ComposePlate onClick={onCompose} disabled={submitting} label={submitting ? 'Composing...' : 'Compose'} />
       </div>
     </div>

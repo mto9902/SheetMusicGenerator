@@ -123,7 +123,7 @@ def build_exercise(request: dict[str, Any]) -> dict[str, Any]:
         }
 
     music_xml = _create_musicxml(request, events, bpm)
-    svg = _render_svg(music_xml, title)
+    svg = _render_svg(music_xml, title, request, events)
     audio_url = render_audio_data_uri(events, bpm)
 
     coordination_label = (

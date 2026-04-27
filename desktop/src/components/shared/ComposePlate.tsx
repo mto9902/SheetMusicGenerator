@@ -11,7 +11,7 @@ export function ComposePlate({ onClick, disabled, label = 'Compose' }: ComposePl
     <motion.button
       onClick={onClick}
       disabled={disabled}
-      className="btn-primary px-8 py-3 text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+      className="tactile-btn-dark px-10 py-3.5 text-sm font-semibold rounded-xl disabled:opacity-40 disabled:cursor-not-allowed"
       whileTap={disabled ? {} : { scale: 0.98 }}
       transition={{ duration: 0.1 }}
     >

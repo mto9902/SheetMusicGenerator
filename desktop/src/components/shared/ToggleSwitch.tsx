@@ -14,7 +14,7 @@ export function ToggleSwitch({ value, onChange, label }: ToggleSwitchProps) {
       >
         <div className="toggle-thumb" />
       </button>
-      <span className="text-[13px] text-[#1C1C1E]" style={{ fontFamily: 'Inter, sans-serif' }}>
+      <span className="text-sm text-gray-700">
         {label}
       </span>
     </div>

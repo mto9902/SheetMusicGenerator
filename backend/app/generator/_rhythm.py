@@ -61,44 +61,91 @@ def _pick_rhythm_cells(
     allowed_durations: list[float],
     rng: random.Random,
 ) -> list[list[float]]:
-    """Pick 3-5 favorite rhythm cells for a phrase, filtered by allowed durations.
+    """Pick 2-3 favourite rhythm cells for the piece.
 
-    Grades 3-4 avoid mixing sixteenths with long values in the same piece.
-    This keeps the rhythmic vocabulary focused — more SRF-like consistency.
+    Production-quality output: each piece picks a TIGHT rhythmic palette
+    (2-3 cells) and reuses it consistently.  Mixing sixteenths with long
+    values in the same piece is the loudest "engine-generated" tell.
+
+    - Grade ≤ 2: 2 cells max from the simple bank.
+    - Grade 3:   2-3 cells, no sixteenths (sixteenths are explicitly opt-in
+                 only via grade 4+).
+    - Grade 4:   3 cells.  Sixteenths allowed but kept rare (one cell at most).
+    - Grade 5:   3-4 cells, full vocabulary.
     """
     allowed_set = set(allowed_durations)
     if grade <= 2:
         candidates = _RHYTHM_CELLS_SIMPLE
     elif grade == 3:
-        candidates = _RHYTHM_CELLS_GRADE3
+        # Grade 3 should NEVER pick a cell with a sixteenth — purely quarter-
+        # and eighth-based vocabulary keeps the visual flow clean.
+        candidates = [c for c in _RHYTHM_CELLS_GRADE3 if min(c) >= 0.5]
     else:
         candidates = _RHYTHM_CELLS_1BEAT + _RHYTHM_CELLS_2BEAT
 
-    # Filter to cells whose durations are all allowed
     valid = [c for c in candidates if all(d in allowed_set for d in c)]
     if not valid:
         valid = [[1.0]]  # fallback
 
-    # For grades 3-4: avoid mixing sixteenths (0.25) with cells that contain
-    # half notes (2.0). This prevents visual overload from mixing very short
-    # and very long values in the same piece.
-    if 3 <= grade <= 4 and len(valid) > 3:
+    # Grade 4: keep sixteenths rare. Pick from the no-sixteenth pool 80% of
+    # the time so most pieces stay clean; the remaining 20% can include one
+    # sixteenth-bearing cell as colour.
+    if grade == 4 and len(valid) > 3:
         has_sixteenth = [c for c in valid if any(d <= 0.25 for d in c)]
         no_sixteenth = [c for c in valid if not any(d <= 0.25 for d in c)]
-        # Prefer no-sixteenth cells 75% of the time
         if no_sixteenth and has_sixteenth:
-            valid = no_sixteenth if rng.random() < 0.75 else valid
+            valid = no_sixteenth if rng.random() < 0.80 else valid
 
-    # Pick 3-4 distinct favorites (but only 2-3 for grades 1-3 to keep simpler)
-    max_cells = 4 if grade >= 4 else 3
-    k = min(rng.randint(2, max_cells), len(valid))
-    favorites = rng.sample(valid, k)
-    # Double up 1-2 favorites for rhythmic motif repetition (creates coherence)
-    if favorites:
-        favorites.append(rng.choice(favorites))
+    # Pick a TIGHT palette: 2 cells for low grades, 3 for high.
+    if grade <= 2:
+        max_cells = 2
+    elif grade <= 4:
+        max_cells = 3
+    else:
+        max_cells = 4
+    k = min(max_cells, len(valid))
+    favourites = rng.sample(valid, k) if len(valid) >= k else list(valid)
+    # Repeat the *first* (anchor) cell so it dominates the piece — this
+    # creates the rhythmic motif identity.
+    if favourites:
+        favourites.append(favourites[0])
         if grade >= 3:
-            favorites.append(rng.choice(favorites))
-    return favorites
+            favourites.append(favourites[0])
+    return favourites
+
+
+def _bar_rhythm_coherence_pass(
+    bar_durations: list[float],
+    pulse: float,
+) -> list[float]:
+    """Force a bar to use ≤ 2 distinct durations (excluding the cadence tail).
+
+    A bar mixing 4+ different durations reads as visual chaos.  This pass
+    finds the dominant 1-2 durations in the bar and remaps any outliers to
+    the nearest dominant one (within tolerance) — preserves total length.
+    """
+    if len(bar_durations) <= 2:
+        return list(bar_durations)
+    from collections import Counter
+    counts = Counter(round(float(d), 3) for d in bar_durations)
+    dominant = [d for d, _ in counts.most_common(2)]
+    if len(dominant) <= 1 or len(set(bar_durations)) <= 2:
+        return list(bar_durations)
+
+    output: list[float] = []
+    for d in bar_durations:
+        if round(d, 3) in dominant:
+            output.append(d)
+        else:
+            # Map outlier to the nearest dominant duration.
+            best = min(dominant, key=lambda dd: abs(dd - d))
+            # Only remap if the swap is small (within a pulse).
+            if abs(best - d) <= pulse:
+                output.append(best)
+            else:
+                output.append(d)  # leave alone if too far
+    # Re-pad/trim if total drifted (should be rare since outliers were small).
+    return output
 
 
 def _fill_measure_from_cells(

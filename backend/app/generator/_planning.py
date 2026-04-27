@@ -50,32 +50,183 @@ _MOTIVE_STEP_TEMPLATES = {
         [2, 1],
         [1, 2, 1],
         [1, 1, 2],
+        # Skip-based ascents — give the line shape, not just a scale crawl.
+        [2, -1, 2],
+        [3, -1, -1, 2],
+        [1, 2, -1, 2],
     ],
     "descending": [
         [-1, -2],
         [-2, -1],
         [-1, -2, -1],
         [-1, -1, -2],
+        # Skip-based descents.
+        [-2, 1, -2],
+        [-3, 1, 1, -2],
+        [-1, -2, 1, -2],
     ],
     "arch": [
         [1, 2, -1],
         [2, 1, -2],
         [1, 1, -2],
         [2, -1, -1],
+        # Wider arches with a clear apex note.
+        [2, 2, -1, -2],
+        [1, 3, -2, -1],
+        [2, -1, 3, -2, -1],
+        [3, -1, -1, -2],
+        # "Sol-mi-do" style triadic arch.
+        [2, -2, 2, -2],
     ],
     "valley": [
         [-1, -2, 1],
         [-2, -1, 2],
         [-1, -1, 2],
         [-2, 1, 1],
+        [-2, -2, 1, 2],
+        [-3, 1, 1, 2],
+        [-1, -3, 2, 1],
     ],
     "flat": [
         [0, 1, -1],
         [1, 0, -1],
         [0, -1, 1],
         [1, -1, 0],
+        # A "neighbor + leap" gesture stays balanced overall but isn't bland.
+        [1, -1, 2, -2],
+        [-1, 1, -2, 2],
+        [2, -1, -2, 1],
     ],
 }
+
+
+# Piece-level motif "kernels" — ranked by character, pulled together with the
+# piece contour. Each entry is a fixed step pattern that survives the
+# repeat/sequence transforms intact, giving the listener an actual recognizable
+# gesture instead of free-form per-bar wiggle.
+_PIECE_MOTIF_KERNELS = {
+    "ascending": [
+        ("step-up-leap-back", [1, 1, 2, -2]),
+        ("scale-climb",       [1, 1, 1, 1]),
+        ("leap-fill-up",      [3, -1, -1, 2]),
+        ("step-then-skip",    [1, 2, -1, 2]),
+        ("anacrusis-rise",    [0, 1, 2, 1]),
+        ("hop-up",            [2, -1, 2, -1]),
+        ("scotch-up",         [1, -1, 2, 1]),
+    ],
+    "descending": [
+        ("step-down-leap",    [-1, -1, -2, 2]),
+        ("scale-fall",        [-1, -1, -1, -1]),
+        ("leap-fill-down",    [-3, 1, 1, -2]),
+        ("step-then-skip",    [-1, -2, 1, -2]),
+        ("anacrusis-fall",    [0, -1, -2, -1]),
+        ("hop-down",          [-2, 1, -2, 1]),
+        ("scotch-down",       [-1, 1, -2, -1]),
+    ],
+    "arch": [
+        ("rise-fall",         [1, 2, -1, -2]),
+        ("triadic-arch",      [2, 2, -2, -2]),
+        ("apex-leap",         [1, 3, -2, -1]),
+        ("scotch-snap-arch",  [2, -1, 1, -2]),
+        ("alberti-arch",      [1, 2, -1, 1, -2]),
+        ("waltz-arch",        [2, -1, -1, 2, -1]),
+        ("neighbor-arch",     [1, -1, 2, 1, -2, -1]),
+        ("third-leap-arch",   [3, -1, -1, -1]),
+    ],
+    "valley": [
+        ("dip-rise",          [-1, -2, 1, 2]),
+        ("triadic-valley",    [-2, -2, 2, 2]),
+        ("turn-low",          [-1, 1, -1, 2]),
+        ("anacrusis-valley",  [0, -1, -2, 2, 1]),
+        ("scoop-up",          [-2, 1, 1, 1]),
+        ("third-leap-valley", [-3, 1, 1, 1]),
+    ],
+    "flat": [
+        ("neighbor-pivot",    [1, -1, -1, 1]),
+        ("turn-figure",       [1, -1, 1, -1]),
+        ("axis-skip",         [2, -2, 1, -1]),
+        ("seesaw",            [1, -2, 2, -1]),
+        ("pendulum",          [-1, 2, -1, -1, 1]),
+        ("call-response",     [2, -1, -1, 1, -1]),
+    ],
+}
+
+
+# Kernel transformations applied at specific measure positions within a
+# phrase. The mapping is (phrase_position_index → transform_name) where
+# transforms are: "base" (kernel as-is), "repeat" (same kernel),
+# "sequence" (transposed kernel), "inversion" (steps negated), "retrograde"
+# (kernel reversed), "fragment" (first half only).  This adds melodic
+# variation within a phrase without losing the kernel's identity.
+_WITHIN_PHRASE_TRANSFORMS = {
+    # Bar 0 = base, bar 1 = repeat (or sequence), bar 2 = transformation,
+    # bar 3 = cadence (always handled separately).
+    2: ["base", "cadence"],
+    3: ["base", "repeat", "cadence"],
+    4: ["base", "repeat", "sequence", "cadence"],
+    5: ["base", "repeat", "sequence", "inversion", "cadence"],
+    6: ["base", "repeat", "sequence", "inversion", "retrograde", "cadence"],
+    7: ["base", "repeat", "sequence", "fragment", "inversion", "retrograde", "cadence"],
+    8: ["base", "repeat", "sequence", "fragment", "inversion", "retrograde", "fragment", "cadence"],
+}
+
+
+def _apply_kernel_transform(kernel: list[int], transform: str) -> list[int]:
+    """Apply a named transform to a motif kernel.
+
+    These are classical motivic transformations: repeat keeps the gesture
+    identical, sequence shifts it (handled by transposition elsewhere),
+    inversion flips up/down direction, retrograde reverses time, fragment
+    takes just the first part.
+    """
+    if not kernel:
+        return list(kernel)
+    if transform == "inversion":
+        return [-step for step in kernel]
+    if transform == "retrograde":
+        return list(reversed(kernel))
+    if transform == "fragment":
+        # First half of the kernel, padded back to full length by mirroring.
+        half = max(1, len(kernel) // 2)
+        return list(kernel[:half])
+    # base, repeat, sequence, cadence — leave the kernel intact (sequence
+    # transposes via pitch resolution, not via step changes).
+    return list(kernel)
+
+
+def _pick_piece_motif_kernel(
+    contour: str,
+    grade: int,
+    rng: random.Random,
+) -> tuple[str, list[int]]:
+    """Pick one piece-wide motif kernel.
+
+    The kernel is a fixed step pattern that anchors the melody.  We pull from
+    a contour-matched bank, with grade-1 biased toward stepwise kernels and
+    grade ≥ 3 allowed to use leap-based kernels for more shape.
+    """
+    bank = list(_PIECE_MOTIF_KERNELS.get(contour, _PIECE_MOTIF_KERNELS["arch"]))
+    if not bank:
+        return "neighbor-pivot", [1, -1, -1, 1]
+    if grade <= 1:
+        # Penalize wide leaps for grade 1 — beginners read steps best.
+        weights = [
+            (3.0 if max(abs(s) for s in steps) <= 1 else 1.0)
+            for _name, steps in bank
+        ]
+    elif grade == 2:
+        weights = [
+            (2.0 if max(abs(s) for s in steps) <= 2 else 1.2)
+            for _name, steps in bank
+        ]
+    else:
+        # Grades 3+ welcome leap kernels for melodic interest.
+        weights = [
+            1.0 + (0.4 if max(abs(s) for s in kernel_steps) >= 2 else 0.0)
+            for _name, kernel_steps in bank
+        ]
+    chosen = rng.choices(bank, weights=weights, k=1)[0]
+    return chosen[0], list(chosen[1])
 
 _MOTIVE_TRANSFORM_BY_ROLE = {
     "establish": "base",
@@ -992,11 +1143,32 @@ def _register_slot_for_position(
     elif contour == "descending":
         slot = peak - (peak - floor) * relative_position
     elif contour == "arch":
-        slope = relative_position * 2 if relative_position <= 0.5 else (1 - relative_position) * 2
-        slot = center + (peak - center) * max(0.0, slope)
+        # True bell curve: rise from a low opening to the peak around 60% of
+        # the phrase, then fall back to a resting low.  This is the shape that
+        # makes melodies feel "shaped" instead of "wandering".
+        # sin(pi * x) gives a smooth bell from 0 at x=0 to 1 at x=0.5 to 0 at x=1.
+        # Shift the apex slightly past the midpoint (0.55) so the climax lands
+        # 60-65% through the phrase — the canonical shape for a sung phrase.
+        shifted = relative_position
+        if relative_position <= 0.55:
+            shifted = relative_position / 0.55 * 0.5
+        else:
+            shifted = 0.5 + (relative_position - 0.55) / 0.45 * 0.5
+        bell = math.sin(math.pi * shifted)
+        # Keep the opening slightly above floor (don't start at the absolute
+        # bottom) and the descent above floor — float between (floor+center)/2
+        # and peak.
+        low = (floor + center) / 2.0
+        slot = low + (peak - low) * bell
     elif contour == "valley":
-        slope = relative_position * 2 if relative_position <= 0.5 else (1 - relative_position) * 2
-        slot = center - (center - floor) * max(0.0, slope)
+        shifted = relative_position
+        if relative_position <= 0.55:
+            shifted = relative_position / 0.55 * 0.5
+        else:
+            shifted = 0.5 + (relative_position - 0.55) / 0.45 * 0.5
+        bell = math.sin(math.pi * shifted)
+        high = (center + peak) / 2.0
+        slot = high - (high - floor) * bell
     else:
         slot = center
     if target_peak_measure:
@@ -1796,6 +1968,8 @@ def _pick_phrase_plan(
     piece_lh_family: str | None = None,
     piece_archetype: str | None = None,
     piece_contour: str | None = None,
+    piece_motif_steps: list[int] | None = None,
+    piece_motif_name: str | None = None,
     phrase_grammar: PhraseGrammar | None = None,
     variation_profile: VariationProfile | None = None,
 ) -> dict[str, Any]:
@@ -2088,6 +2262,55 @@ def _pick_phrase_plan(
         measure_total=_measure_total(request["timeSignature"]),
         grade_stage=style_profile.grade_stage,
     )
+
+    # Phase 11: piece-level motif kernel.  When a piece-wide kernel is
+    # supplied, it overrides the per-phrase contour-derived steps so every
+    # melody bar shares the same recognizable gesture.  The "answer" phrase
+    # gets a mirrored copy so consequent phrases feel like a response, not a
+    # repeat.
+    if piece_motif_steps:
+        kernel = list(piece_motif_steps)
+        if phrase_index >= 1 and phrase_grammar is not None and phrase_grammar.function == "consequent":
+            # Mirror the kernel for consequent phrases — same shape, inverted.
+            kernel = [-step for step in kernel]
+        # Adapt kernel length to whatever the cell rhythm requires.
+        target_step_count = max(1, len(motive_blueprint.get("durations", [])) - 1)
+        adapted = _adapt_step_template(kernel, target_step_count)
+        if style_profile.grade == 1 and style_profile.grade_stage == "g1-pocket":
+            adapted = [max(-1, min(1, int(step))) for step in adapted]
+
+        # Within-phrase transforms: pick a sequence like
+        # base → repeat → inversion → cadence so the same kernel returns
+        # transformed across the phrase, giving the ear something to follow
+        # while keeping it fresh.  Only applies when phrase length matches a
+        # known transform pattern.
+        within_phrase = _WITHIN_PHRASE_TRANSFORMS.get(len(phrase_measures), [])
+        steps_by_measure: dict[int, list[int]] = {}
+        existing_transforms = dict(motive_blueprint.get("transformByMeasure", {}))
+        if within_phrase and len(phrase_measures) >= 3 and style_profile.grade >= 2:
+            for index, measure_number in enumerate(phrase_measures):
+                if index >= len(within_phrase):
+                    break
+                transform_name = within_phrase[index]
+                if transform_name in {"inversion", "retrograde", "fragment"}:
+                    variant_kernel = _apply_kernel_transform(adapted, transform_name)
+                    variant_steps = _adapt_step_template(variant_kernel, target_step_count)
+                    if style_profile.grade == 1 and style_profile.grade_stage == "g1-pocket":
+                        variant_steps = [max(-1, min(1, int(step))) for step in variant_steps]
+                    steps_by_measure[measure_number] = variant_steps
+                    # Mark the measure with the within-phrase transform so the
+                    # realiser can apply intensify-style adjustments.  Don't
+                    # overwrite a "cadence" transform for the last measure.
+                    if existing_transforms.get(measure_number) not in {"cadence"}:
+                        existing_transforms[measure_number] = transform_name
+
+        motive_blueprint = {
+            **motive_blueprint,
+            "steps": adapted,
+            "kernelName": piece_motif_name,
+            "stepsByMeasure": steps_by_measure,
+            "transformByMeasure": existing_transforms,
+        }
     continuation_by_measure = _build_continuation_plan(
         phrase_archetype,
         phrase_measures,

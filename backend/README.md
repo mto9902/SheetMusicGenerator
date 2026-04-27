@@ -51,3 +51,5 @@ powershell -ExecutionPolicy Bypass -File .\backend\scripts\predeploy_backend_che
 - If Verovio is unavailable, the API still returns a placeholder SVG so the mobile app can continue working.
 - Audio preview is returned as a generated WAV data URI with both hands mixed together.
 - Repeated requests with the same config + seed are cached under `backend/cache/`.
+- The cache is bounded and prunes least-recently-used JSON files. Defaults are 32 entries and 50 MB.
+- Override with `SHEETGEN_CACHE_MAX_ENTRIES` and `SHEETGEN_CACHE_MAX_BYTES`; set either to `0` to disable disk caching.

@@ -12,7 +12,7 @@ from typing import Any
 
 from ..config import KEY_TONIC_PITCH_CLASS, HARMONY_INTERVALS
 from ._types import LinePlan
-from ._helpers import _fit_measure, _fit_measure_variants
+from ._helpers import _fit_measure, _fit_measure_variants, _pulse_value
 from ._pitch import _key_pitch_classes
 from ._rhythm import _RHYTHM_CELLS_SIMPLE, _CADENCE_LIBRARY, _contour_direction_bias
 from ._chord import (
@@ -131,12 +131,22 @@ def _realize_motive_fragment(
     target_pitch: int | None = None,
     allowed_durations: list[float] | None = None,
     rng: random.Random | None = None,
+    *,
+    measure_number: int | None = None,
 ) -> tuple[list[dict[str, Any]], int, list[int], int, float, dict[str, Any] | None]:
     if transform in {"none", "contrast"}:
         return [], prev_pitch, recent, direction, 0.0, None
 
     durations = list(blueprint.get("durations", []))
     steps = list(blueprint.get("steps", []))
+
+    # Per-measure step variants — used by kernel "inversion"/"retrograde"
+    # transforms so the same gesture returns reshaped within a phrase without
+    # losing its rhythmic identity.
+    steps_by_measure = blueprint.get("stepsByMeasure") or {}
+    if measure_number is not None and measure_number in steps_by_measure:
+        steps = list(steps_by_measure[measure_number])
+
     if transform == "cadence":
         durations = list(blueprint.get("answerDurations", durations))
         durations = durations[: max(2, min(3, len(durations)))]
@@ -155,6 +165,16 @@ def _realize_motive_fragment(
     elif transform == "intensify":
         durations = list(blueprint.get("answerDurations", durations))
         steps = [min(3, max(-3, s + (1 if s > 0 else -1))) for s in steps]
+    # Phase 12: motivic inversion — same rhythm, melodic shape flipped.
+    # If stepsByMeasure has already supplied the inverted kernel, leave it;
+    # otherwise flip here as a fallback.
+    elif transform == "inversion":
+        if measure_number is None or measure_number not in steps_by_measure:
+            steps = [-int(s) for s in steps]
+    # Phase 12: motivic retrograde — same rhythm, kernel played backward.
+    elif transform == "retrograde":
+        if measure_number is None or measure_number not in steps_by_measure:
+            steps = list(reversed([int(s) for s in steps]))
 
     # Clamp durations to allowed set (prevents eighth notes in lower grades)
     if allowed_durations:
@@ -1310,10 +1330,14 @@ def _apply_lh_variation_pass(
             if k in template_event
         }
 
+        # Production-quality LH simplification palette.  Default is single-
+        # bass shapes — chord stacks read as visual heaviness when used on
+        # most bars.  We allow one chord-bearing variant ("bass_then_chord")
+        # at low weight for occasional harmonic colour.
         palette = [
-            ("block_half", [(total / 2.0, sorted(chord)), (total / 2.0, sorted(chord))], 1.0),
-            ("held_chord", [(total, sorted(chord))], 0.85),
-            ("bass_then_chord", [(total / 2.0, [bass]), (total / 2.0, sorted(chord))], 0.8),
+            ("block_half_bass", [(total / 2.0, [bass]), (total / 2.0, [bass])], 1.4),
+            ("held_bass",       [(total, [bass])], 1.2),
+            ("bass_then_chord", [(total / 2.0, [bass]), (total / 2.0, sorted(chord))], 0.4),
         ]
         names = [p[0] for p in palette]
         weights = [p[2] for p in palette]
@@ -1347,6 +1371,159 @@ def _apply_lh_variation_pass(
     return merged
 
 
+def _apply_hand_complementarity(
+    events: list[dict[str, Any]],
+    total: float,
+    measure_count: int,
+) -> list[dict[str, Any]]:
+    """Make LH simplify when RH is busy, and stay active when RH is calm.
+
+    Real piano writing follows the principle of complementary motion: when
+    one hand has many notes, the other hand has few.  Generators that ignore
+    this produce visual chaos — both hands moving simultaneously creates
+    unreadable density.  This pass scans each bar and rewrites the LH to
+    a simpler shape (held / block-half) when the RH has ≥ 5 events.
+    """
+    from collections import defaultdict
+
+    final_measure = int(measure_count)
+    rh_count_by_measure: dict[int, int] = defaultdict(int)
+    lh_by_measure: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    other_events: list[dict[str, Any]] = []
+
+    for ev in events:
+        m = int(ev.get("measure", 0))
+        if ev.get("hand") == "rh" and not ev.get("isRest") and ev.get("pitches"):
+            rh_count_by_measure[m] += 1
+        if ev.get("hand") == "lh" and m != final_measure:
+            lh_by_measure[m].append(ev)
+        else:
+            other_events.append(ev)
+
+    if not lh_by_measure:
+        return events
+
+    # A bar is "RH-busy" when it has ≥ 5 RH events (many eighths or sixteenths).
+    BUSY_THRESHOLD = 5
+
+    for measure_number, measure_events in list(lh_by_measure.items()):
+        rh_count = rh_count_by_measure.get(measure_number, 0)
+        if rh_count < BUSY_THRESHOLD:
+            continue
+        # If the LH already has ≤ 2 events this bar, it's already simple.
+        if len(measure_events) <= 2:
+            continue
+
+        # Collect harmony pitches in use this bar.
+        pitches: set[int] = set()
+        for e in measure_events:
+            if not e.get("isRest"):
+                for p in e.get("pitches", []):
+                    pitches.add(int(p))
+        if not pitches:
+            continue
+        sorted_pitches = sorted(pitches)
+        bass = sorted_pitches[0]
+        chord: list[int] = [bass]
+        for candidate in sorted_pitches[1:]:
+            if candidate - bass <= 12 and candidate != bass:
+                chord.append(candidate)
+                break
+
+        base_offset = float(measure_events[0].get("offset", 0.0))
+        template_event = measure_events[0]
+        metadata = {
+            k: template_event.get(k)
+            for k in (
+                "measure",
+                "harmony",
+                "phraseIndex",
+                "phraseCadence",
+                "leftFamily",
+                "measureRole",
+                "targetDensity",
+                "phraseContour",
+                "rhTexture",
+            )
+            if k in template_event
+        }
+
+        # Rewrite as single-bass block-half so the LH stays out of the way
+        # while the RH carries the busy melody.  Chord stacks here would
+        # double the visual density we're trying to reduce.
+        if total >= 4.0:
+            shape: list[tuple[float, list[int]]] = [
+                (total / 2.0, [bass]),
+                (total / 2.0, [bass]),
+            ]
+        else:
+            shape = [(total, [bass])]
+
+        rebuilt: list[dict[str, Any]] = []
+        cursor = 0.0
+        for dur, chord_pitches in shape:
+            ev: dict[str, Any] = {
+                "hand": "lh",
+                "offset": round(base_offset + cursor, 3),
+                "quarterLength": float(dur),
+                "isRest": False,
+                "pitches": list(chord_pitches),
+                "technique": "lh complementary simplify",
+                **metadata,
+            }
+            rebuilt.append(ev)
+            cursor += float(dur)
+        lh_by_measure[measure_number] = rebuilt
+
+    rebuilt_lh: list[dict[str, Any]] = []
+    for m in sorted(lh_by_measure):
+        rebuilt_lh.extend(lh_by_measure[m])
+
+    merged = other_events + rebuilt_lh
+    merged.sort(key=lambda e: (int(e.get("measure", 0)), float(e.get("offset", 0.0)), 0 if e.get("hand") == "rh" else 1))
+    return merged
+
+
+def _apply_pulse_alignment(
+    events: list[dict[str, Any]],
+    total: float,
+    pulse: float,
+) -> list[dict[str, Any]]:
+    """Snap event offsets to clean pulse subdivisions when within tolerance.
+
+    Floating-point drift and triplet remainders can leave events at
+    awkward offsets like 0.501 or 0.749.  Production scores want every event
+    on a clean subdivision: integer pulse, half-pulse, or quarter-pulse only.
+    """
+    # Allowed subdivisions of a pulse: pulse, pulse/2, pulse/4 (16th), pulse/3 (triplet).
+    allowed_subdivisions = sorted({
+        round(k * pulse, 6)
+        for k in (0.0, 0.25, 0.5, 0.75, 1.0)
+    })
+    # Build candidate snap points across one bar.
+    snap_points: list[float] = []
+    point = 0.0
+    while point < total - 0.001:
+        for sub in allowed_subdivisions:
+            candidate = round(point + sub, 6)
+            if candidate < total - 0.001:
+                snap_points.append(candidate)
+        point = round(point + pulse, 6)
+    snap_points.append(round(total, 6))
+    snap_points = sorted(set(snap_points))
+
+    SNAP_TOLERANCE = 0.04  # quarter-length units; ~25ms at q=120
+    for ev in events:
+        if ev.get("tuplet"):  # triplets have their own subdivisions
+            continue
+        local_offset = round(float(ev.get("offset", 0.0)) % total, 6)
+        nearest = min(snap_points, key=lambda p: abs(p - local_offset))
+        if abs(nearest - local_offset) <= SNAP_TOLERANCE and nearest != local_offset:
+            measure_offset = float(ev.get("offset", 0.0)) - local_offset
+            ev["offset"] = round(measure_offset + nearest, 3)
+    return events
+
+
 def _apply_lh_piece_ending(
     pool: list[int],
     key_signature: str,
@@ -1367,6 +1544,17 @@ def _apply_lh_piece_ending(
         bass_note = min(tonic_candidates, key=lambda c: abs(c - prev_bass_pitch))
     else:
         bass_note = prev_bass_pitch
+
+    if grade == 1:
+        return [{
+            "hand": "lh",
+            "offset": 0.0,
+            "quarterLength": total,
+            "isRest": False,
+            "pitches": [bass_note],
+            "technique": "final bass",
+            "fermata": True,
+        }]
 
     fifth_pc = (tonic_pc + 7) % 12
     fifth_above = next(
@@ -1489,6 +1677,177 @@ def _apply_penultimate_ending(
         idx = events.index(last_pitched)
         del events[idx + 1:]
         last_pitched["quarterLength"] = remaining
+
+    # Penultimate rhythm contrast: if every event in this bar is the same
+    # short duration AND the rest of the piece has been busy with shorts,
+    # consolidate the LAST TWO short notes into one longer note so the
+    # cadence approach decelerates audibly.  Real cadential bars almost
+    # always slow into the resolution.
+    pitched_events = [e for e in events if not e.get("isRest") and e.get("pitches")]
+    if len(pitched_events) >= 3:
+        durations = [round(float(e.get("quarterLength", 1.0)), 3) for e in pitched_events]
+        unique_durations = set(durations)
+        # Already varied? Then the bar reads fine; skip contrast.
+        if len(unique_durations) == 1 and durations[0] <= 1.0:
+            # Combine the LAST short note with the prior step's duration so
+            # the bar's tail decelerates.  Skip if we already extended above.
+            if remaining <= last_dur:
+                # Merge the last two pitched events into one longer event.
+                # Find the *second-to-last* pitched event in the events list.
+                second_idx = None
+                last_idx = events.index(last_pitched)
+                for j in range(last_idx - 1, -1, -1):
+                    if not events[j].get("isRest") and events[j].get("pitches"):
+                        second_idx = j
+                        break
+                if second_idx is not None:
+                    second_event = events[second_idx]
+                    second_dur = float(second_event.get("quarterLength", 0.0))
+                    last_dur = float(last_pitched.get("quarterLength", 0.0))
+                    # New consolidated duration = sum of both.
+                    new_dur = round(second_dur + last_dur, 3)
+                    snapped = min(_SNAP_DURS, key=lambda d: abs(d - new_dur))
+                    if abs(snapped - new_dur) < 0.02:
+                        new_dur = snapped
+                    # Drop the second event, extend last to cover its slot.
+                    last_pitched["offset"] = float(second_event.get("offset", last_pitched["offset"]))
+                    last_pitched["quarterLength"] = new_dur
+                    events.pop(second_idx)
+
+
+def _apply_half_cadence_landing(
+    events: list[dict[str, Any]],
+    measure_number: int,
+    pool: list[int],
+    key_signature: str,
+) -> None:
+    """Force the last RH note in a half-cadence measure onto a V-chord tone.
+
+    Antecedent phrases end with a "weak" (V) cadence so the next phrase can
+    answer.  The harmonic plan handles the chord; this safety net makes the
+    melodic landing audibly say "we're sitting on dominant" rather than
+    accidentally drifting back to tonic.  Lands on 5̂ or 2̂ (V's root or 5th —
+    7̂ also works but is more dissonant for beginners).
+    """
+    bar_events = [
+        e for e in events
+        if e.get("hand") == "rh"
+        and int(e.get("measure", 0)) == measure_number
+        and not e.get("isRest")
+        and e.get("pitches")
+        and len(e["pitches"]) == 1
+    ]
+    if len(bar_events) < 2:
+        return
+    last_event = bar_events[-1]
+
+    tonic_pc = KEY_TONIC_PITCH_CLASS.get(key_signature, 0)
+    scale_pcs = sorted(_key_pitch_classes(key_signature))
+    if tonic_pc not in scale_pcs:
+        return
+    tonic_idx = scale_pcs.index(tonic_pc)
+    # Scale degrees 2 (supertonic — V's 5th) and 5 (dominant — V's root).
+    target_pcs = {
+        scale_pcs[(tonic_idx + 4) % len(scale_pcs)],  # 5̂
+        scale_pcs[(tonic_idx + 1) % len(scale_pcs)],  # 2̂
+    }
+    candidates = [p for p in pool if p % 12 in target_pcs]
+    if not candidates:
+        return
+    current_pitch = int(last_event["pitches"][0])
+    if current_pitch % 12 in target_pcs:
+        return  # already on a V-chord tone
+    # Pick the closest candidate to keep voice-leading smooth.
+    best = min(candidates, key=lambda c: abs(c - current_pitch))
+    last_event["pitches"] = [best]
+
+
+def _apply_leap_gap_fill(
+    events: list[dict[str, Any]],
+    rh_pool: list[int],
+    max_leap: int,
+) -> list[dict[str, Any]]:
+    """After an RH leap of ≥ a 4th (5 semitones), the next note steps back into the gap.
+
+    Real melodies use leaps as expressive gestures and almost always "answer"
+    them with motion in the opposite direction (ideally by step).  When the
+    generator emits a leap and the next note keeps going in the same direction
+    or jumps further, the line feels disjointed — this pass nudges the
+    post-leap note toward the gap so the leap reads as deliberate.
+    """
+    if not events:
+        return events
+
+    # Group RH events in order.  Leap = ≥ 5 semitones (perfect 4th).
+    rh_indices = [
+        idx for idx, e in enumerate(events)
+        if e.get("hand") == "rh"
+        and not e.get("isRest")
+        and e.get("pitches")
+        and len(e.get("pitches", [])) == 1
+    ]
+    if len(rh_indices) < 3:
+        return events
+
+    pool_sorted = sorted({int(p) for p in rh_pool})
+    if not pool_sorted:
+        return events
+
+    LEAP_THRESHOLD = 5  # perfect 4th
+    for slot in range(len(rh_indices) - 2):
+        a_idx, b_idx, c_idx = rh_indices[slot], rh_indices[slot + 1], rh_indices[slot + 2]
+        a_event, b_event, c_event = events[a_idx], events[b_idx], events[c_idx]
+        # Don't tamper across measures — the half-cadence/penultimate/final
+        # ending passes have their own logic and we shouldn't override them.
+        if int(b_event.get("measure", 0)) != int(c_event.get("measure", 0)):
+            continue
+        # Don't override notes we deliberately shaped.
+        if c_event.get("technique") in {"final tonic", "final cadence"}:
+            continue
+
+        a_pitch = int(a_event["pitches"][0])
+        b_pitch = int(b_event["pitches"][0])
+        c_pitch = int(c_event["pitches"][0])
+
+        leap = b_pitch - a_pitch
+        if abs(leap) < LEAP_THRESHOLD:
+            continue
+
+        next_motion = c_pitch - b_pitch
+        # Already filling? Step opposite to leap is the goal.
+        if leap > 0 and next_motion < 0 and abs(next_motion) <= 2:
+            continue
+        if leap < 0 and next_motion > 0 and abs(next_motion) <= 2:
+            continue
+        # If the line stays on the same note (c==b), let it be — that's fine.
+        if c_pitch == b_pitch:
+            continue
+
+        # Compute desired pitch: one diatonic step from b in the OPPOSITE
+        # direction of the leap.  Find b's index in the pool then nudge.
+        if b_pitch in pool_sorted:
+            b_pool_idx = pool_sorted.index(b_pitch)
+        else:
+            b_pool_idx = min(range(len(pool_sorted)), key=lambda i: abs(pool_sorted[i] - b_pitch))
+        step_dir = -1 if leap > 0 else 1
+        target_pool_idx = max(0, min(len(pool_sorted) - 1, b_pool_idx + step_dir))
+        candidate_pitch = pool_sorted[target_pool_idx]
+        # Ensure within max_leap from b.
+        if abs(candidate_pitch - b_pitch) > max_leap:
+            continue
+        # Don't undo a leap that the score system asked for — only override
+        # when the original c was a *bigger* leap or a continuation in the
+        # same direction.
+        original_motion_size = abs(next_motion)
+        new_motion_size = abs(candidate_pitch - b_pitch)
+        same_direction_continuation = (leap > 0 and next_motion > 0) or (leap < 0 and next_motion < 0)
+        if same_direction_continuation or original_motion_size > 4:
+            c_event["pitches"] = [candidate_pitch]
+            c_event["technique"] = (
+                str(c_event.get("technique", "")) + " gap-fill"
+            ).strip()
+
+    return events
 
 
 def _build_melody_content(
@@ -1703,6 +2062,7 @@ def _build_melody_content(
             target_pitch=int(planned_top_pitch) if planned_top_pitch is not None else None,
             allowed_durations=allowed_durations,
             rng=rng,
+            measure_number=current_measure,
         )
         if motif_events:
             for motif_event in motif_events:
@@ -2369,62 +2729,148 @@ def _inject_chromatic_approaches_post(
     request: dict[str, Any],
     rng: random.Random,
 ) -> list[dict[str, Any]]:
-    """Inject 1-3 chromatic approach notes into the RH of the winning candidate.
+    """Insert chromatic passing tones — proper, musically-grounded accidentals.
 
-    Works on the final event list so it survives multi-candidate scoring.
-    Targets develop/intensify/answer measures only (keeps openings and
-    cadences clean).
+    Production-quality rule: a chromatic accidental is only inserted when it
+    creates a SMOOTH stepwise sequence (each move ≤ 2 semitones).  We INSERT
+    a half-step note between two consecutive RH notes that are a whole step
+    apart — splitting the prior note's duration so the rhythm stays clean.
+
+    Pre-condition for insertion at slot (A → B):
+      1. |B - A| == 2 semitones (whole step apart, the only context where a
+         chromatic passing tone makes melodic sense)
+      2. duration(A) ≥ pulse (must be ≥ a quarter to safely split into two
+         halves without producing sub-sixteenth notes)
+      3. A is in develop / intensify / answer role (no openings, no cadences)
+      4. A is not already part of a tied/sloped event
+
+    Result: A → A̅ (chromatic) → B  with each interval ≤ 1 semitone.  This is
+    the canonical chromatic passing tone; never produces awkward augmented
+    intervals.
     """
     key_signature = request["keySignature"]
     pitch_classes = _key_pitch_classes(key_signature)
     measure_count = int(request.get("measureCount", 8))
+    pulse = _pulse_value(request["timeSignature"])
 
-    # Collect RH pitched-note indices in eligible measures
-    eligible_pairs: list[tuple[int, int]] = []  # (index_of_note, index_of_next_note)
+    # Find candidate slots: consecutive RH notes a whole step apart in the
+    # same measure with sufficient duration on the prior note AND truly
+    # adjacent in time (no intervening events sharing the time span).
+    candidates: list[tuple[int, int, int]] = []  # (idx_a, idx_b, chromatic_pitch)
     rh_indices = [
         i for i, e in enumerate(events)
         if e.get("hand") == "rh"
         and not e.get("isRest")
         and e.get("pitches")
         and len(e["pitches"]) == 1
+        and not e.get("tieType")
+        and not e.get("tuplet")
     ]
     for a, b in zip(rh_indices, rh_indices[1:]):
         ea, eb = events[a], events[b]
-        # Same measure and eligible role
+        # Require A and B to be the IMMEDIATE next RH single-pitch event in
+        # the events array — no triplets, dyads, ties, or other RH events
+        # between them in the time stream.  A's end-offset must equal B's
+        # start-offset (within tolerance).
+        a_end = float(ea.get("offset", 0.0)) + float(ea.get("_actualDur", ea.get("quarterLength", 0.0)))
+        b_start = float(eb.get("offset", 0.0))
+        if abs(a_end - b_start) > 0.05:
+            continue
+        # Also confirm no other RH event overlaps the gap.
+        gap_overlap = any(
+            j != a and j != b
+            and events[j].get("hand") == "rh"
+            and not events[j].get("isRest")
+            and float(events[j].get("offset", 0.0)) >= float(ea.get("offset", 0.0))
+            and float(events[j].get("offset", 0.0)) < b_start - 0.001
+            for j in range(min(a, b) + 1, max(a, b))
+        )
+        if gap_overlap:
+            continue
         if int(ea.get("measure", 0)) != int(eb.get("measure", 0)):
             continue
-        role = str(ea.get("measureRole", ""))
         m_num = int(ea.get("measure", 0))
+        if m_num <= 1 or m_num >= measure_count:
+            continue
+        role = str(ea.get("measureRole", ""))
         if role not in ("develop", "intensify", "answer"):
             continue
-        # Don't touch the final measure
-        if m_num >= measure_count:
+        if str(ea.get("technique", "")) in {"final tonic", "final cadence", "motif"}:
             continue
-        eligible_pairs.append((a, b))
+        a_pitch = int(ea["pitches"][0])
+        b_pitch = int(eb["pitches"][0])
+        gap = b_pitch - a_pitch
+        # Only whole-step pairs can host a chromatic passing tone with both
+        # melodic moves staying ≤ 1 semitone — the canonical, never-broken
+        # chromatic passing tone shape.
+        if abs(gap) != 2:
+            continue
 
-    if not eligible_pairs:
+        a_dur = float(ea.get("_actualDur", ea.get("quarterLength", 0.0)))
+        if a_dur < pulse * 0.95:
+            continue
+
+        # The chromatic note is exactly the half-step between A and B.
+        chromatic_pitch = (a_pitch + b_pitch) // 2
+        if chromatic_pitch % 12 in pitch_classes:
+            continue  # midpoint is diatonic — no accidental needed
+        # Sanity: result is A → chrom → B with both moves exactly 1 semitone.
+        if abs(chromatic_pitch - a_pitch) != 1 or abs(b_pitch - chromatic_pitch) != 1:
+            continue
+        candidates.append((a, b, chromatic_pitch))
+
+    if not candidates:
         return events
 
-    # Pick 1-3 pairs to chromaticize
-    target_count = min(len(eligible_pairs), rng.randint(1, 3))
-    chosen = rng.sample(eligible_pairs, target_count)
-    applied = 0
-    for idx_a, idx_b in chosen:
-        target_pitch = int(events[idx_b]["pitches"][0])
-        cur_pitch = int(events[idx_a]["pitches"][0])
-        # Approach from below or above depending on direction
-        if cur_pitch <= target_pitch:
-            approach = target_pitch - 1
-        else:
-            approach = target_pitch + 1
-        # Ensure approach is actually chromatic
-        if approach % 12 in pitch_classes:
-            approach = target_pitch + 1 if cur_pitch <= target_pitch else target_pitch - 1
-        if approach % 12 in pitch_classes:
-            continue  # both directions diatonic — skip
-        events[idx_a]["pitches"] = [approach]
-        events[idx_a]["technique"] = "chromatic approach"
-        applied += 1
+    # Production-tuned rate: 1-2 accidentals for short pieces, 2-3 for longer.
+    grade = int(request.get("grade", 4))
+    if measure_count <= 4:
+        max_count = 1
+    elif measure_count <= 8:
+        max_count = 2
+    else:
+        max_count = 3
+    if grade < 5:
+        max_count = min(max_count, 2)
+    target_count = min(len(candidates), max_count)
+    if target_count <= 0:
+        return events
+    chosen = rng.sample(candidates, target_count)
+
+    inserts: list[tuple[int, dict[str, Any]]] = []
+    for idx_a, idx_b, chromatic_pitch in chosen:
+        ea = events[idx_a]
+        a_dur = float(ea.get("_actualDur", ea.get("quarterLength", 0.0)))
+        a_offset = float(ea.get("offset", 0.0))
+        half_dur = round(a_dur / 2.0, 3)
+        if half_dur < 0.5:
+            continue
+
+        # Shrink A's duration to half.
+        ea["quarterLength"] = half_dur
+        ea["_actualDur"] = half_dur
+
+        # Build the new chromatic event sharing A's metadata.
+        new_event = {
+            **ea,
+            "offset": round(a_offset + half_dur, 3),
+            "quarterLength": half_dur,
+            "_actualDur": half_dur,
+            "pitches": [chromatic_pitch],
+            "technique": "chromatic passing",
+            "phraseFunction": "passing",
+            "ornamentFunction": "chromatic_approach",
+        }
+        # Strip event-level expression markings that shouldn't carry over.
+        for key in ("eventId", "tieGroup", "tieType", "slurId", "slurRole",
+                    "slurStartIds", "slurStopIds", "hairpinStart", "hairpinStopIds",
+                    "articulation", "dynamic"):
+            new_event.pop(key, None)
+        inserts.append((idx_a + 1, new_event))
+
+    # Apply insertions back-to-front so earlier indices stay valid.
+    for idx, ev in sorted(inserts, key=lambda item: item[0], reverse=True):
+        events.insert(idx, ev)
 
     return events
 
